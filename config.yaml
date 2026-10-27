@@ -1,0 +1,65 @@
+# Intraday option-buying agent — configuration.
+# Secrets (API key) live in .env, not here.
+
+instrument:
+  underlying: NIFTY            # NIFTY | BANKNIFTY | SENSEX (SENSEX needs underlying_exchange BSE_INDEX, option_exchange BFO)
+  underlying_exchange: NSE_INDEX
+  option_exchange: NFO
+  # signal_symbol: NIFTY24NOV26FUT   # optional: use the future (has volume -> true VWAP) for signals
+  # signal_exchange: NFO
+  expiry: nearest              # nearest | next
+  min_days_to_expiry: 0        # 0 = allow expiry-day trading; 1 = skip the expiry day itself
+  offset: ATM                  # ATM | OTM1 | ITM1 ...
+  product: MIS
+
+strategy:
+  name: orb_trend
+  candle_interval: 5m
+  history_days: 5              # prior days pulled so EMAs are warmed up at the open
+  opening_range_minutes: 15    # 09:15–09:30
+  entry_start: "09:30"
+  entry_end: "14:30"
+  ema_fast: 9
+  ema_slow: 21
+  use_vwap_filter: true
+  use_ema_filter: true
+  min_range_pct: 0.10          # skip if opening range < 0.10% of price (too quiet)
+  max_range_pct: 0.80          # skip if opening range > 0.80% of price (too wild)
+  max_extension_pct: 0.30      # do not chase a close more than 0.30% beyond the range
+  max_trades_per_day: 2
+  max_trades_per_direction: 1
+  cooldown_minutes: 10
+  underlying_exit: true        # exit if a 5m close comes back through VWAP/slow EMA
+
+risk:
+  capital: 100000              # the capital you are allocating to this agent (₹)
+  risk_per_trade_pct: 1.0      # ₹1,000 per trade at 1 lakh -> sizes lots from premium * stop%
+  max_daily_loss_pct: 2.0      # stop trading for the day after -₹2,000
+  max_lots: 2
+  min_lots: 1
+  stop_loss_pct: 25            # on the option premium
+  target_pct: 50
+  breakeven_at_pct: 15         # move stop to entry once premium is +15%
+  trail_activate_pct: 25       # start trailing once premium is +25%
+  trail_step_pct: 12           # trail 12% below the highest premium seen
+  min_premium: 20
+  max_premium: 400
+  square_off_time: "15:10"
+
+execution:
+  strategy_tag: IntradayOptionAgent
+  fill_timeout_sec: 20
+  exit_retries: 3
+  poll_interval_sec: 1.0
+  candle_delay_sec: 5
+  ws_stale_sec: 10
+  quote_fallback_interval_sec: 2
+  allow_live: false            # SAFETY LATCH. Live orders only when OpenAlgo analyzer is OFF *and* this is true.
+  live_max_lots: 1             # hard cap on lots while live
+  adopt_unknown_positions: false
+
+notify:
+  telegram_username: ""        # your OpenAlgo Telegram bot username to get trade alerts (optional)
+
+state_dir: state
+log_dir: logs

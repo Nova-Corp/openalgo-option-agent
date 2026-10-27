@@ -1,0 +1,224 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Option Agent</title>
+<style>
+  :root { --bg:#f6f7f9; --card:#fff; --text:#1b1f24; --muted:#6a737d; --line:#e1e4e8; --green:#1a7f37; --red:#cf222e; --amber:#9a6700; --accent:#0969da; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#0d1117; --card:#161b22; --text:#e6edf3; --muted:#8b949e; --line:#30363d; --green:#3fb950; --red:#f85149; --amber:#d29922; --accent:#58a6ff; } }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+  header { display:flex; flex-wrap:wrap; gap:12px; align-items:center; padding:12px 16px; border-bottom:1px solid var(--line); background:var(--card); position:sticky; top:0; z-index:2; }
+  header h1 { font-size:16px; margin:0 12px 0 0; }
+  .pill { padding:3px 10px; border-radius:999px; font-weight:600; font-size:12px; border:1px solid var(--line); }
+  .pill.paper { color:var(--green); border-color:var(--green); }
+  .pill.live { color:#fff; background:var(--red); border-color:var(--red); }
+  .pill.off { color:var(--amber); border-color:var(--amber); }
+  .spacer { flex:1; }
+  .muted { color:var(--muted); }
+  main { padding:16px; max-width:1400px; margin:0 auto; }
+  .cards { display:grid; grid-template-columns:repeat(auto-fit, minmax(150px, 1fr)); gap:12px; margin-bottom:16px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:12px 14px; }
+  .card .k { font-size:12px; color:var(--muted); }
+  .card .v { font-size:22px; font-weight:600; margin-top:2px; }
+  .pos { color:var(--green); } .neg { color:var(--red); }
+  section { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:12px 14px; margin-bottom:16px; }
+  section h2 { font-size:14px; margin:0 0 10px; }
+  .filters { display:flex; flex-wrap:wrap; gap:8px 14px; align-items:end; margin-bottom:10px; }
+  .filters label { display:flex; flex-direction:column; font-size:12px; color:var(--muted); gap:3px; }
+  input, select, button { font:inherit; padding:5px 8px; border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--text); }
+  button { cursor:pointer; } button.primary { background:var(--accent); color:#fff; border-color:var(--accent); }
+  table { width:100%; border-collapse:collapse; font-variant-numeric:tabular-nums; }
+  th, td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line); white-space:nowrap; }
+  th { font-size:12px; color:var(--muted); font-weight:600; cursor:pointer; user-select:none; }
+  td.num, th.num { text-align:right; }
+  .wrap { overflow:auto; }
+  .tag { font-size:11px; padding:1px 6px; border-radius:4px; border:1px solid var(--line); color:var(--muted); }
+  .tag.OPEN, .tag.ENTERING, .tag.EXITING { color:var(--accent); border-color:var(--accent); }
+  .tag.FAILED { color:var(--red); border-color:var(--red); }
+  pre { margin:0; font-size:12px; line-height:1.4; max-height:260px; overflow:auto; white-space:pre-wrap; color:var(--muted); }
+  .open-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(140px, 1fr)); gap:8px 16px; }
+  .open-grid div b { display:block; font-size:12px; color:var(--muted); font-weight:500; }
+  .err { color:var(--red); font-size:12px; }
+  @media (max-width:600px) { header h1 { width:100%; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Option Agent</h1>
+  <span id="mode" class="pill">…</span>
+  <span id="latch" class="muted"></span>
+  <span class="spacer"></span>
+  <label class="muted"><input type="checkbox" id="auto" checked> auto refresh</label>
+  <select id="interval"><option value="5">5s</option><option value="10" selected>10s</option><option value="30">30s</option></select>
+  <button id="refresh">Refresh</button>
+  <span id="updated" class="muted"></span>
+</header>
+<main>
+  <div class="cards">
+    <div class="card"><div class="k">Today's P&amp;L</div><div class="v" id="c_today">–</div></div>
+    <div class="card"><div class="k">Open unrealized</div><div class="v" id="c_unreal">–</div></div>
+    <div class="card"><div class="k">Filtered P&amp;L</div><div class="v" id="c_pnl">–</div></div>
+    <div class="card"><div class="k">Trades (closed)</div><div class="v" id="c_n">–</div></div>
+    <div class="card"><div class="k">Win rate</div><div class="v" id="c_win">–</div></div>
+    <div class="card"><div class="k">Avg win / loss</div><div class="v" id="c_avg" style="font-size:16px">–</div></div>
+    <div class="card"><div class="k">Sandbox / broker cash</div><div class="v" id="c_cash" style="font-size:16px">–</div></div>
+  </div>
+
+  <section id="open">
+    <h2>Current position</h2>
+    <div id="open_body" class="muted">none</div>
+  </section>
+
+  <section>
+    <h2>Trades</h2>
+    <div class="filters">
+      <label>From <input type="date" id="f_from"></label>
+      <label>To <input type="date" id="f_to"></label>
+      <label>Type <select id="f_type"><option value="">all</option><option>CE</option><option>PE</option></select></label>
+      <label>Status <select id="f_status"><option value="">all</option><option>CLOSED</option><option>OPEN</option><option>FAILED</option></select></label>
+      <label>Mode <select id="f_mode"><option value="">all</option><option value="paper">paper</option><option value="LIVE">live</option></select></label>
+      <label>Exit reason <input type="text" id="f_reason" placeholder="e.g. TARGET, STOP, square"></label>
+      <button id="today">Today</button><button id="week">7 days</button><button id="clear">Clear</button>
+      <button id="csv">Export CSV</button>
+    </div>
+    <div class="wrap">
+      <table id="tbl">
+        <thead><tr>
+          <th data-k="date">Date</th><th data-k="entry_time">Entry</th><th data-k="exit_time">Exit</th>
+          <th data-k="symbol">Symbol</th><th data-k="option_type">Type</th><th data-k="mode">Mode</th>
+          <th class="num" data-k="qty">Qty</th><th class="num" data-k="entry_price">Entry ₹</th><th class="num" data-k="exit_price">Exit ₹</th>
+          <th class="num" data-k="pnl">P&amp;L ₹</th><th data-k="status">Status</th><th data-k="exit_reason">Exit reason</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <div id="empty" class="muted" style="padding:8px 0">no trades match</div>
+  </section>
+
+  <section>
+    <h2>OpenAlgo positions <span id="pos_err" class="err"></span></h2>
+    <div class="wrap"><table id="postbl"><thead><tr><th>Symbol</th><th>Exchange</th><th>Product</th><th class="num">Qty</th><th class="num">Avg</th><th class="num">LTP</th><th class="num">P&amp;L</th></tr></thead><tbody></tbody></table></div>
+    <div id="pos_empty" class="muted" style="padding:8px 0">none</div>
+  </section>
+
+  <section>
+    <h2>Recent log</h2>
+    <pre id="log"></pre>
+  </section>
+</main>
+<script>
+(function () {
+  const $ = id => document.getElementById(id);
+  const fmt = n => (n == null || isNaN(n)) ? '–' : Number(n).toLocaleString('en-IN', {maximumFractionDigits: 2, minimumFractionDigits: 2});
+  const sign = n => n > 0 ? 'pos' : (n < 0 ? 'neg' : '');
+  const hhmm = s => s ? s.slice(11, 16) : '';
+  let data = null, sortKey = 'date', sortDir = -1, timer = null;
+
+  function saveFilters() { try { localStorage.setItem('oa_filters', JSON.stringify(readFilters())); } catch (e) {} }
+  function readFilters() {
+    return { from: $('f_from').value, to: $('f_to').value, type: $('f_type').value, status: $('f_status').value, mode: $('f_mode').value, reason: $('f_reason').value.trim().toLowerCase() };
+  }
+  function loadFilters() {
+    try { const f = JSON.parse(localStorage.getItem('oa_filters') || '{}');
+      if (f.from) $('f_from').value = f.from; if (f.to) $('f_to').value = f.to; if (f.type) $('f_type').value = f.type;
+      if (f.status) $('f_status').value = f.status; if (f.mode) $('f_mode').value = f.mode; if (f.reason) $('f_reason').value = f.reason; } catch (e) {}
+  }
+
+  function filtered() {
+    if (!data) return [];
+    const f = readFilters();
+    return data.trades.filter(t =>
+      (!f.from || t.date >= f.from) && (!f.to || t.date <= f.to) &&
+      (!f.type || t.option_type === f.type) && (!f.status || t.status === f.status) &&
+      (!f.mode || t.mode === f.mode) && (!f.reason || (t.exit_reason || '').toLowerCase().includes(f.reason)));
+  }
+
+  function render() {
+    if (!data) return;
+    const b = data.broker, cfg = data.config;
+    const modeEl = $('mode');
+    if (!b.ok) { modeEl.textContent = 'OpenAlgo unreachable'; modeEl.className = 'pill off'; }
+    else if (b.paper) { modeEl.textContent = 'PAPER · analyzer ON'; modeEl.className = 'pill paper'; }
+    else { modeEl.textContent = 'LIVE · analyzer OFF'; modeEl.className = 'pill live'; }
+    $('latch').textContent = `${cfg.underlying} · capital ₹${fmt(cfg.capital)} · allow_live ${cfg.allow_live} · square-off ${cfg.square_off}` + (b.ok ? '' : ` · ${b.error}`);
+    $('updated').textContent = 'updated ' + data.generated.slice(11, 19);
+
+    const rows = filtered().sort((a, b2) => { const x = a[sortKey] ?? '', y = b2[sortKey] ?? ''; return (x > y ? 1 : x < y ? -1 : 0) * sortDir; });
+    const closed = rows.filter(t => t.status === 'CLOSED');
+    const pnl = closed.reduce((s, t) => s + (t.pnl || 0), 0);
+    const wins = closed.filter(t => t.pnl > 0), losses = closed.filter(t => t.pnl <= 0);
+    const todayClosed = data.trades.filter(t => t.status === 'CLOSED' && t.date === data.today);
+    const todayPnl = todayClosed.reduce((s, t) => s + (t.pnl || 0), 0);
+    set('c_today', todayPnl, true); set('c_pnl', pnl, true);
+    $('c_n').textContent = closed.length + (rows.length !== closed.length ? ` (${rows.length} total)` : '');
+    $('c_win').textContent = closed.length ? Math.round(100 * wins.length / closed.length) + '%' : '–';
+    $('c_avg').innerHTML = closed.length ? `<span class="pos">${fmt(wins.length ? wins.reduce((s, t) => s + t.pnl, 0) / wins.length : 0)}</span> / <span class="neg">${fmt(losses.length ? losses.reduce((s, t) => s + t.pnl, 0) / losses.length : 0)}</span>` : '–';
+    $('c_cash').textContent = b.ok && b.funds ? '₹' + fmt(b.funds.availablecash) : '–';
+    const ot = data.open_trade;
+    set('c_unreal', ot && ot.unrealized != null ? ot.unrealized : null, true);
+    if (ot) {
+      const u = ot.unrealized, st = ot.stop || {};
+      $('open_body').className = '';
+      $('open_body').innerHTML = `<div class="open-grid">
+        <div><b>Symbol</b>${ot.symbol}</div><div><b>Status</b><span class="tag ${ot.status}">${ot.status}</span></div>
+        <div><b>Qty</b>${ot.qty} (${ot.lots} lot${ot.lots > 1 ? 's' : ''})</div><div><b>Entry</b>₹${fmt(ot.entry_price)} at ${hhmm(ot.entry_time)}</div>
+        <div><b>LTP</b>${ot.ltp != null ? '₹' + fmt(ot.ltp) : '–'}</div><div><b>Unrealized</b><span class="${sign(u)}">${u != null ? '₹' + fmt(u) : '–'}</span></div>
+        <div><b>Stop</b>₹${fmt(st.stop)}${st.trailing ? ' (trailing)' : st.breakeven_done ? ' (breakeven)' : ''}</div><div><b>Target</b>₹${fmt(st.target)}</div>
+        <div><b>Highest</b>₹${fmt(st.highest)}</div><div><b>Mode</b>${ot.mode}</div>
+        <div style="grid-column:1/-1"><b>Signal</b>${ot.signal || ''}</div></div>`;
+    } else { $('open_body').className = 'muted'; $('open_body').textContent = 'none'; }
+
+    const tb = $('tbl').querySelector('tbody'); tb.innerHTML = '';
+    for (const t of rows) {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `<td>${t.date}</td><td>${hhmm(t.entry_time)}</td><td>${hhmm(t.exit_time)}</td><td>${t.symbol}</td><td>${t.option_type}</td><td>${t.mode}</td>
+        <td class="num">${t.qty}</td><td class="num">${fmt(t.entry_price)}</td><td class="num">${t.status === 'CLOSED' ? fmt(t.exit_price) : '–'}</td>
+        <td class="num ${sign(t.pnl)}">${t.status === 'CLOSED' ? fmt(t.pnl) : '–'}</td><td><span class="tag ${t.status}">${t.status}</span></td><td title="${(t.exit_reason || '').replace(/"/g, '&quot;')}">${(t.exit_reason || '').slice(0, 60)}</td>`;
+      tb.appendChild(tr);
+    }
+    $('empty').style.display = rows.length ? 'none' : '';
+
+    const pb = $('postbl').querySelector('tbody'); pb.innerHTML = '';
+    const positions = (b.positions || []);
+    for (const p of positions) {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `<td>${p.symbol}</td><td>${p.exchange}</td><td>${p.product}</td><td class="num">${p.quantity}</td><td class="num">${fmt(p.average_price)}</td><td class="num">${fmt(p.ltp)}</td><td class="num ${sign(+p.pnl)}">${fmt(p.pnl)}</td>`;
+      pb.appendChild(tr);
+    }
+    $('pos_empty').style.display = positions.length ? 'none' : '';
+    $('pos_err').textContent = b.ok ? '' : b.error;
+    $('log').textContent = (data.log || []).join('\n');
+  }
+  function set(id, v, money) { const el = $(id); el.textContent = v == null ? '–' : (money ? '₹' : '') + fmt(v); el.className = 'v ' + sign(v); }
+
+  async function load() {
+    try {
+      const r = await fetch('/api/summary', {cache: 'no-store'});
+      data = await r.json();
+      render();
+    } catch (e) { $('updated').textContent = 'refresh failed: ' + e; }
+  }
+  function schedule() {
+    clearInterval(timer);
+    if ($('auto').checked) timer = setInterval(load, Number($('interval').value) * 1000);
+  }
+
+  ['f_from', 'f_to', 'f_type', 'f_status', 'f_mode', 'f_reason'].forEach(id => $(id).addEventListener('input', () => { saveFilters(); render(); }));
+  $('clear').onclick = () => { ['f_from', 'f_to', 'f_type', 'f_status', 'f_mode', 'f_reason'].forEach(id => $(id).value = ''); saveFilters(); render(); };
+  $('today').onclick = () => { $('f_from').value = $('f_to').value = data ? data.today : ''; saveFilters(); render(); };
+  $('week').onclick = () => { const d = new Date(); $('f_to').value = d.toISOString().slice(0, 10); d.setDate(d.getDate() - 7); $('f_from').value = d.toISOString().slice(0, 10); saveFilters(); render(); };
+  $('refresh').onclick = load; $('auto').onchange = schedule; $('interval').onchange = schedule;
+  $('csv').onclick = () => {
+    const cols = ['date', 'entry_time', 'exit_time', 'symbol', 'option_type', 'mode', 'lots', 'qty', 'entry_price', 'exit_price', 'pnl', 'status', 'exit_reason', 'signal'];
+    const esc = v => '"' + String(v ?? '').replace(/"/g, '""') + '"';
+    const lines = [cols.join(',')].concat(filtered().map(t => cols.map(c => esc(t[c])).join(',')));
+    const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([lines.join('\n')], {type: 'text/csv'})); a.download = 'trades.csv'; a.click();
+  };
+  document.querySelectorAll('th[data-k]').forEach(th => th.onclick = () => { const k = th.dataset.k; sortDir = (sortKey === k) ? -sortDir : -1; sortKey = k; render(); });
+  loadFilters(); load(); schedule();
+})();
+</script>
+</body>
+</html>
