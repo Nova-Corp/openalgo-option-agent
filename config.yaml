@@ -2,8 +2,8 @@
 # Secrets (API key) live in .env, not here.
 
 instrument:
-  underlying: NIFTY            # NIFTY | BANKNIFTY | SENSEX (SENSEX needs underlying_exchange BSE_INDEX, option_exchange BFO)
-  underlying_exchange: NSE_INDEX
+  underlying: NIFTY            # default index. Override per run: ./morning.sh SENSEX  or  ./run.sh run -u BANKNIFTY
+  underlying_exchange: NSE_INDEX   # filled in automatically from the underlying (NSE_INDEX/NFO or BSE_INDEX/BFO)
   option_exchange: NFO
   # signal_symbol: NIFTY24NOV26FUT   # optional: use the future (has volume -> true VWAP) for signals
   # signal_exchange: NFO
@@ -57,6 +57,19 @@ execution:
   allow_live: false            # SAFETY LATCH. Live orders only when OpenAlgo analyzer is OFF *and* this is true.
   live_max_lots: 1             # hard cap on lots while live
   adopt_unknown_positions: false
+
+# Indices ./morning.sh starts when you give it no arguments. Each runs as its own agent with its own
+# journal in state/<INDEX>/, its own daily loss limit and its own lots. ./morning.sh NIFTY SENSEX overrides this.
+active_underlyings: [NIFTY]
+
+# Per-index overrides, applied on top of the sections above when that index is selected.
+# BANKNIFTY and SENSEX ATM premiums are usually 3-5x NIFTY's, so widen the premium window there.
+underlyings:
+  NIFTY: {}
+  BANKNIFTY:
+    risk: {min_premium: 50, max_premium: 1200}
+  SENSEX:
+    risk: {min_premium: 50, max_premium: 1200}
 
 notify:
   telegram_username: ""        # your OpenAlgo Telegram bot username to get trade alerts (optional)

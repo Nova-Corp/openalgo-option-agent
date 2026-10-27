@@ -67,8 +67,9 @@
   </div>
 
   <section id="open">
-    <h2>Current position</h2>
-    <div id="open_body" class="muted">none</div>
+    <h2>Current positions <span id="agents" class="muted" style="font-weight:normal"></span></h2>
+    <div class="wrap"><table id="opentbl"><thead><tr><th>Index</th><th>Symbol</th><th>Status</th><th class="num">Qty</th><th class="num">Entry ₹</th><th>Time</th><th class="num">LTP ₹</th><th class="num">Unrealized ₹</th><th class="num">Stop ₹</th><th class="num">Target ₹</th><th class="num">High ₹</th><th>Signal</th></tr></thead><tbody></tbody></table></div>
+    <div id="open_body" class="muted" style="padding:8px 0">none</div>
   </section>
 
   <section>
@@ -76,6 +77,7 @@
     <div class="filters">
       <label>From <input type="date" id="f_from"></label>
       <label>To <input type="date" id="f_to"></label>
+      <label>Index <select id="f_und"><option value="">all</option><option>NIFTY</option><option>BANKNIFTY</option><option>SENSEX</option><option>FINNIFTY</option></select></label>
       <label>Type <select id="f_type"><option value="">all</option><option>CE</option><option>PE</option></select></label>
       <label>Status <select id="f_status"><option value="">all</option><option>CLOSED</option><option>OPEN</option><option>FAILED</option></select></label>
       <label>Mode <select id="f_mode"><option value="">all</option><option value="paper">paper</option><option value="LIVE">live</option></select></label>
@@ -87,7 +89,7 @@
       <table id="tbl">
         <thead><tr>
           <th data-k="date">Date</th><th data-k="entry_time">Entry</th><th data-k="exit_time">Exit</th>
-          <th data-k="symbol">Symbol</th><th data-k="option_type">Type</th><th data-k="mode">Mode</th>
+          <th data-k="underlying">Index</th><th data-k="symbol">Symbol</th><th data-k="option_type">Type</th><th data-k="mode">Mode</th>
           <th class="num" data-k="qty">Qty</th><th class="num" data-k="entry_price">Entry ₹</th><th class="num" data-k="exit_price">Exit ₹</th>
           <th class="num" data-k="pnl">P&amp;L ₹</th><th data-k="status">Status</th><th data-k="exit_reason">Exit reason</th>
         </tr></thead>
@@ -118,11 +120,11 @@
 
   function saveFilters() { try { localStorage.setItem('oa_filters', JSON.stringify(readFilters())); } catch (e) {} }
   function readFilters() {
-    return { from: $('f_from').value, to: $('f_to').value, type: $('f_type').value, status: $('f_status').value, mode: $('f_mode').value, reason: $('f_reason').value.trim().toLowerCase() };
+    return { from: $('f_from').value, to: $('f_to').value, und: $('f_und').value, type: $('f_type').value, status: $('f_status').value, mode: $('f_mode').value, reason: $('f_reason').value.trim().toLowerCase() };
   }
   function loadFilters() {
     try { const f = JSON.parse(localStorage.getItem('oa_filters') || '{}');
-      if (f.from) $('f_from').value = f.from; if (f.to) $('f_to').value = f.to; if (f.type) $('f_type').value = f.type;
+      if (f.from) $('f_from').value = f.from; if (f.to) $('f_to').value = f.to; if (f.type) $('f_type').value = f.type; if (f.und) $('f_und').value = f.und;
       if (f.status) $('f_status').value = f.status; if (f.mode) $('f_mode').value = f.mode; if (f.reason) $('f_reason').value = f.reason; } catch (e) {}
   }
 
@@ -131,7 +133,7 @@
     const f = readFilters();
     return data.trades.filter(t =>
       (!f.from || t.date >= f.from) && (!f.to || t.date <= f.to) &&
-      (!f.type || t.option_type === f.type) && (!f.status || t.status === f.status) &&
+      (!f.type || t.option_type === f.type) && (!f.und || t.underlying === f.und) && (!f.status || t.status === f.status) &&
       (!f.mode || t.mode === f.mode) && (!f.reason || (t.exit_reason || '').toLowerCase().includes(f.reason)));
   }
 
@@ -142,7 +144,9 @@
     if (!b.ok) { modeEl.textContent = 'OpenAlgo unreachable'; modeEl.className = 'pill off'; }
     else if (b.paper) { modeEl.textContent = 'PAPER · analyzer ON'; modeEl.className = 'pill paper'; }
     else { modeEl.textContent = 'LIVE · analyzer OFF'; modeEl.className = 'pill live'; }
-    $('latch').textContent = `${cfg.underlying} · capital ₹${fmt(cfg.capital)} · allow_live ${cfg.allow_live} · square-off ${cfg.square_off}` + (b.ok ? '' : ` · ${b.error}`);
+    const live = (data.running || []).filter(r => r.alive).map(r => r.underlying);
+    const und = live.length ? live.join('+') : 'no agent running';
+    $('latch').textContent = `${und} · capital ₹${fmt(cfg.capital)} · allow_live ${cfg.allow_live} · square-off ${cfg.square_off}` + (b.ok ? '' : ` · ${b.error}`);
     $('updated').textContent = 'updated ' + data.generated.slice(11, 19);
 
     const rows = filtered().sort((a, b2) => { const x = a[sortKey] ?? '', y = b2[sortKey] ?? ''; return (x > y ? 1 : x < y ? -1 : 0) * sortDir; });
@@ -156,24 +160,28 @@
     $('c_win').textContent = closed.length ? Math.round(100 * wins.length / closed.length) + '%' : '–';
     $('c_avg').innerHTML = closed.length ? `<span class="pos">${fmt(wins.length ? wins.reduce((s, t) => s + t.pnl, 0) / wins.length : 0)}</span> / <span class="neg">${fmt(losses.length ? losses.reduce((s, t) => s + t.pnl, 0) / losses.length : 0)}</span>` : '–';
     $('c_cash').textContent = b.ok && b.funds ? '₹' + fmt(b.funds.availablecash) : '–';
-    const ot = data.open_trade;
-    set('c_unreal', ot && ot.unrealized != null ? ot.unrealized : null, true);
-    if (ot) {
-      const u = ot.unrealized, st = ot.stop || {};
-      $('open_body').className = '';
-      $('open_body').innerHTML = `<div class="open-grid">
-        <div><b>Symbol</b>${ot.symbol}</div><div><b>Status</b><span class="tag ${ot.status}">${ot.status}</span></div>
-        <div><b>Qty</b>${ot.qty} (${ot.lots} lot${ot.lots > 1 ? 's' : ''})</div><div><b>Entry</b>₹${fmt(ot.entry_price)} at ${hhmm(ot.entry_time)}</div>
-        <div><b>LTP</b>${ot.ltp != null ? '₹' + fmt(ot.ltp) : '–'}</div><div><b>Unrealized</b><span class="${sign(u)}">${u != null ? '₹' + fmt(u) : '–'}</span></div>
-        <div><b>Stop</b>₹${fmt(st.stop)}${st.trailing ? ' (trailing)' : st.breakeven_done ? ' (breakeven)' : ''}</div><div><b>Target</b>₹${fmt(st.target)}</div>
-        <div><b>Highest</b>₹${fmt(st.highest)}</div><div><b>Mode</b>${ot.mode}</div>
-        <div style="grid-column:1/-1"><b>Signal</b>${ot.signal || ''}</div></div>`;
-    } else { $('open_body').className = 'muted'; $('open_body').textContent = 'none'; }
+    const ots = data.open_trades || [];
+    const unreal = ots.some(t => t.unrealized != null) ? ots.reduce((s, t) => s + (t.unrealized || 0), 0) : null;
+    set('c_unreal', unreal, true);
+    const ob = $('opentbl').querySelector('tbody'); ob.innerHTML = '';
+    for (const ot of ots) {
+      const st = ot.stop || {};
+      const tr = document.createElement('tr');
+      tr.innerHTML = `<td>${ot.underlying || ''}</td><td>${ot.symbol}</td><td><span class="tag ${ot.status}">${ot.status}</span></td>
+        <td class="num">${ot.qty}</td><td class="num">${fmt(ot.entry_price)}</td><td>${hhmm(ot.entry_time)}</td>
+        <td class="num">${ot.ltp != null ? fmt(ot.ltp) : '–'}</td><td class="num ${sign(ot.unrealized)}">${ot.unrealized != null ? fmt(ot.unrealized) : '–'}</td>
+        <td class="num">${fmt(st.stop)}${st.trailing ? ' ↗' : st.breakeven_done ? ' =' : ''}</td><td class="num">${fmt(st.target)}</td><td class="num">${fmt(st.highest)}</td>
+        <td title="${(ot.signal || '').replace(/"/g, '&quot;')}">${(ot.signal || '').slice(0, 50)}</td>`;
+      ob.appendChild(tr);
+    }
+    $('open_body').style.display = ots.length ? 'none' : '';
+    const agents = (data.running || []).filter(r => r.alive).map(r => r.underlying);
+    $('agents').textContent = agents.length ? `· agents running: ${agents.join(', ')}` : '· no agent running';
 
     const tb = $('tbl').querySelector('tbody'); tb.innerHTML = '';
     for (const t of rows) {
       const tr = document.createElement('tr');
-      tr.innerHTML = `<td>${t.date}</td><td>${hhmm(t.entry_time)}</td><td>${hhmm(t.exit_time)}</td><td>${t.symbol}</td><td>${t.option_type}</td><td>${t.mode}</td>
+      tr.innerHTML = `<td>${t.date}</td><td>${hhmm(t.entry_time)}</td><td>${hhmm(t.exit_time)}</td><td>${t.underlying || ''}</td><td>${t.symbol}</td><td>${t.option_type}</td><td>${t.mode}</td>
         <td class="num">${t.qty}</td><td class="num">${fmt(t.entry_price)}</td><td class="num">${t.status === 'CLOSED' ? fmt(t.exit_price) : '–'}</td>
         <td class="num ${sign(t.pnl)}">${t.status === 'CLOSED' ? fmt(t.pnl) : '–'}</td><td><span class="tag ${t.status}">${t.status}</span></td><td title="${(t.exit_reason || '').replace(/"/g, '&quot;')}">${(t.exit_reason || '').slice(0, 60)}</td>`;
       tb.appendChild(tr);
@@ -205,13 +213,13 @@
     if ($('auto').checked) timer = setInterval(load, Number($('interval').value) * 1000);
   }
 
-  ['f_from', 'f_to', 'f_type', 'f_status', 'f_mode', 'f_reason'].forEach(id => $(id).addEventListener('input', () => { saveFilters(); render(); }));
-  $('clear').onclick = () => { ['f_from', 'f_to', 'f_type', 'f_status', 'f_mode', 'f_reason'].forEach(id => $(id).value = ''); saveFilters(); render(); };
+  ['f_from', 'f_to', 'f_und', 'f_type', 'f_status', 'f_mode', 'f_reason'].forEach(id => $(id).addEventListener('input', () => { saveFilters(); render(); }));
+  $('clear').onclick = () => { ['f_from', 'f_to', 'f_und', 'f_type', 'f_status', 'f_mode', 'f_reason'].forEach(id => $(id).value = ''); saveFilters(); render(); };
   $('today').onclick = () => { $('f_from').value = $('f_to').value = data ? data.today : ''; saveFilters(); render(); };
   $('week').onclick = () => { const d = new Date(); $('f_to').value = d.toISOString().slice(0, 10); d.setDate(d.getDate() - 7); $('f_from').value = d.toISOString().slice(0, 10); saveFilters(); render(); };
   $('refresh').onclick = load; $('auto').onchange = schedule; $('interval').onchange = schedule;
   $('csv').onclick = () => {
-    const cols = ['date', 'entry_time', 'exit_time', 'symbol', 'option_type', 'mode', 'lots', 'qty', 'entry_price', 'exit_price', 'pnl', 'status', 'exit_reason', 'signal'];
+    const cols = ['date', 'entry_time', 'exit_time', 'underlying', 'symbol', 'option_type', 'mode', 'lots', 'qty', 'entry_price', 'exit_price', 'pnl', 'status', 'exit_reason', 'signal'];
     const esc = v => '"' + String(v ?? '').replace(/"/g, '""') + '"';
     const lines = [cols.join(',')].concat(filtered().map(t => cols.map(c => esc(t[c])).join(',')));
     const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([lines.join('\n')], {type: 'text/csv'})); a.download = 'trades.csv'; a.click();

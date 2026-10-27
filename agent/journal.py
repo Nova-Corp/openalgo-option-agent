@@ -12,7 +12,7 @@ from typing import Optional
 
 from .clock import IST
 
-TRADE_FIELDS = ["id", "date", "mode", "symbol", "exchange", "option_type", "lots", "qty", "entry_orderid",
+TRADE_FIELDS = ["id", "date", "mode", "underlying", "symbol", "exchange", "option_type", "lots", "qty", "entry_orderid",
                 "entry_price", "entry_time", "exit_orderid", "exit_price", "exit_time", "exit_reason",
                 "pnl", "status", "signal", "stop"]
 
@@ -40,6 +40,7 @@ class Trade:
     stop: dict = field(default_factory=dict)
     product: str = "MIS"
     lotsize: int = 0
+    underlying: str = ""
 
     @staticmethod
     def new(**kw) -> "Trade":

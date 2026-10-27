@@ -53,21 +53,40 @@ def cmd_run(cfg, args):
 
     from .lock import AlreadyRunning, SingleInstance
 
+    cfg.index_state_dir.mkdir(parents=True, exist_ok=True)
+    running = cfg.index_state_dir / "running.json"
+    import logging
+    import signal
+
+    def _on_signal(signum, frame):
+        logging.getLogger("agent").warning("received %s: exiting (open trade, if any, stays open in OpenAlgo)",
+                                           signal.Signals(signum).name)
+        raise SystemExit(128 + signum)
+
+    for sig in (signal.SIGTERM, signal.SIGHUP):
+        signal.signal(sig, _on_signal)
     try:
-        with SingleInstance(Path(cfg.project_dir) / cfg.state_dir / "agent.lock"):
-            eng = Engine(cfg, _broker(cfg))
-            if args.forever:
-                eng.run_forever()
-            else:
-                eng.run()
+        with SingleInstance(cfg.index_state_dir / "agent.lock"):
+            import os
+
+            running.write_text(json.dumps({"pid": os.getpid(), "underlying": cfg.instrument.underlying,
+                                           "forever": bool(args.forever), "started": __import__("datetime").datetime.now().isoformat(timespec="seconds")}))
+            try:
+                eng = Engine(cfg, _broker(cfg))
+                if args.forever:
+                    eng.run_forever()
+                else:
+                    eng.run()
+            finally:
+                running.unlink(missing_ok=True)
     except AlreadyRunning as e:
-        rprint(f"[bold red]{e}[/bold red]. Stop the other copy first (./service.sh stop, or Ctrl+C in its terminal).")
+        rprint(f"[bold red]{e}[/bold red]. Stop the other {cfg.instrument.underlying} copy first.")
         return 3
     except ModeNotAllowed as e:
         rprint(f"[bold red]{e}[/bold red]")
         return 2
     except KeyboardInterrupt:
-        rprint("[yellow]interrupted; open position (if any) is still live in OpenAlgo. Use `squareoff` to flatten.[/yellow]")
+        logging.getLogger("agent").warning("interrupted (Ctrl+C); open position (if any) is still live in OpenAlgo. Use `squareoff` to flatten.")
         return 130
     return 0
 
@@ -94,17 +113,40 @@ def cmd_status(cfg, args):
     b = _broker(cfg)
     paper = b.analyzer_mode()
     rprint(f"mode: {'PAPER (analyzer ON)' if paper else '[bold red]LIVE (analyzer OFF)[/bold red]'}")
-    rprint("funds:", b.funds())
-    j = Journal(Path(cfg.project_dir) / cfg.state_dir, now_ist().date())
-    t = Table(title=f"today's trades ({j.day})")
-    for col in ("status", "symbol", "qty", "entry", "exit", "pnl", "reason"):
-        t.add_column(col)
-    for tr in j.trades:
-        t.add_row(tr.status, tr.symbol, str(tr.qty), f"{tr.entry_price:.2f}", f"{tr.exit_price:.2f}", f"{tr.pnl:+.2f}", tr.exit_reason[:50])
-    console.print(t)
-    rprint(f"realized pnl today: {j.realized_pnl():+.2f}")
+    f = b.funds()
+    rprint(f"funds: available {f.get('availablecash', 0):,.0f}  realized today {f.get('today_realized_pnl', f.get('m2mrealized', 0)):+,.0f}")
+    base = Path(cfg.project_dir) / cfg.state_dir
+    today = now_ist().date()
+    total, rows = 0.0, []
+    rprint(f"agents ({today}):")
+    for d in sorted(p for p in base.iterdir() if p.is_dir()):
+        alive = False
+        try:
+            import os
+
+            pid = int(json.loads((d / "running.json").read_text()).get("pid", 0))
+            os.kill(pid, 0)
+            alive = True
+        except Exception:
+            pass
+        j = Journal(d, today)
+        total += j.realized_pnl()
+        open_t = j.open_trade()
+        state = "[green]running[/green]" if alive else "[yellow]stopped[/yellow]"
+        extra = f"OPEN {open_t.symbol} x{open_t.qty} @ {open_t.entry_price:.2f}" if open_t else f"{j.count()} trades, pnl {j.realized_pnl():+.2f}"
+        rprint(f"  {d.name:<10} {state}   {extra}")
+        rows += [(d.name, tr) for tr in j.trades]
+    if rows:
+        t = Table(title="today's trades", expand=False)
+        for col in ("index", "status", "symbol", "qty", "entry", "exit", "pnl", "reason"):
+            t.add_column(col, overflow="fold")
+        for name, tr in rows:
+            t.add_row(name, tr.status, tr.symbol, str(tr.qty), f"{tr.entry_price:.2f}", f"{tr.exit_price:.2f}",
+                      f"{tr.pnl:+.2f}", tr.exit_reason[:40])
+        console.print(t)
+    rprint(f"realized pnl today (all indices): {total:+.2f}")
     pos = [p for p in b.positionbook() if int(float(p.get("quantity", 0) or 0)) != 0]
-    rprint("open positions in OpenAlgo:", pos or "none")
+    rprint("open positions in OpenAlgo:", ", ".join(f"{p['symbol']} {p['quantity']}" for p in pos) or "none")
     return 0
 
 
@@ -115,7 +157,7 @@ def cmd_squareoff(cfg, args):
     from .clock import Clock
 
     b = _broker(cfg)
-    j = Journal(Path(cfg.project_dir) / cfg.state_dir, now_ist().date())
+    j = Journal(cfg.index_state_dir, now_ist().date())
     t = j.open_trade()
     if t:
         ex = Executor(b, cfg.execution, Clock())
@@ -124,7 +166,7 @@ def cmd_squareoff(cfg, args):
         j.update(t)
         rprint(f"closed {t.symbol} @ {t.exit_price:.2f} pnl={t.pnl:+.2f}")
     else:
-        rprint("no open trade in the journal.")
+        rprint(f"no open {cfg.instrument.underlying} trade in the journal (use -u INDEX for another index).")
     if args.all:
         rprint("closeposition:", b.close_all_positions())
     return 0
@@ -153,7 +195,8 @@ def cmd_backtest(cfg, args):
                   f"{x.premium_entry:.1f}", f"{x.premium_exit:.1f}", str(x.qty), f"{x.pnl:+.0f}", x.reason)
     console.print(t)
     rprint(summarize(trades))
-    out = Path(cfg.project_dir) / cfg.state_dir / "backtest_last.csv"
+    out = cfg.index_state_dir / "backtest_last.csv"
+    out.parent.mkdir(parents=True, exist_ok=True)
     import pandas as pd
 
     pd.DataFrame([x.__dict__ for x in trades]).to_csv(out, index=False)
@@ -170,13 +213,14 @@ def cmd_dashboard(cfg, args):
 
 
 def cmd_journal(cfg, args):
-    p = Path(cfg.project_dir) / cfg.state_dir / "trades.csv"
-    if not p.exists():
-        rprint("no closed trades yet.")
-        return 0
     import pandas as pd
 
-    df = pd.read_csv(p)
+    base = Path(cfg.project_dir) / cfg.state_dir
+    files = sorted(base.glob("*/trades.csv")) + ([base / "trades.csv"] if (base / "trades.csv").exists() else [])
+    if not files:
+        rprint("no closed trades yet.")
+        return 0
+    df = pd.concat([pd.read_csv(f) for f in files], ignore_index=True).sort_values("exit_time")
     console.print(df.tail(args.n).to_string())
     rprint(f"total pnl: {df['pnl'].sum():+.2f} over {len(df)} trades")
     return 0
@@ -185,6 +229,7 @@ def cmd_journal(cfg, args):
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="agent", description="Intraday option-buying agent for OpenAlgo")
     ap.add_argument("--config", default="config.yaml")
+    ap.add_argument("--underlying", "-u", help="NIFTY | BANKNIFTY | SENSEX ... (overrides config.yaml)")
     ap.add_argument("--log-level", default="INFO")
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("check", help="verify OpenAlgo connectivity, mode, funds, contracts, candles")
@@ -207,8 +252,13 @@ def main(argv=None) -> int:
     jn = sub.add_parser("journal", help="show closed trades")
     jn.add_argument("-n", type=int, default=30)
     args = ap.parse_args(argv)
-    cfg = load_config(args.config)
-    setup_logging(Path(cfg.project_dir) / cfg.log_dir, args.log_level)
+    try:
+        cfg = load_config(args.config, args.underlying)
+    except ValueError as e:
+        rprint(f"[bold red]config error:[/bold red] {e}")
+        return 2
+    log_name = {"run": f"agent-{cfg.instrument.underlying}", "dashboard": "dashboard"}.get(args.cmd, "cli")
+    setup_logging(Path(cfg.project_dir) / cfg.log_dir, args.log_level, log_name)
     from .broker import BrokerError
 
     try:

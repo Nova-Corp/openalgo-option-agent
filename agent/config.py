@@ -92,6 +92,17 @@ class NotifyCfg(BaseModel):
     telegram_username: str = ""  # OpenAlgo telegram bot username to notify, blank = off
 
 
+# Exchanges per index. Everything else (lot size, expiry list, strikes) comes from OpenAlgo at runtime.
+UNDERLYING_PRESETS: dict[str, dict] = {
+    "NIFTY": {"underlying_exchange": "NSE_INDEX", "option_exchange": "NFO"},
+    "BANKNIFTY": {"underlying_exchange": "NSE_INDEX", "option_exchange": "NFO"},
+    "FINNIFTY": {"underlying_exchange": "NSE_INDEX", "option_exchange": "NFO"},
+    "MIDCPNIFTY": {"underlying_exchange": "NSE_INDEX", "option_exchange": "NFO"},
+    "SENSEX": {"underlying_exchange": "BSE_INDEX", "option_exchange": "BFO"},
+    "BANKEX": {"underlying_exchange": "BSE_INDEX", "option_exchange": "BFO"},
+}
+
+
 class Config(BaseModel):
     openalgo: OpenAlgoCfg = Field(default_factory=OpenAlgoCfg)
     instrument: InstrumentCfg = Field(default_factory=InstrumentCfg)
@@ -99,9 +110,38 @@ class Config(BaseModel):
     risk: RiskCfg = Field(default_factory=RiskCfg)
     execution: ExecutionCfg = Field(default_factory=ExecutionCfg)
     notify: NotifyCfg = Field(default_factory=NotifyCfg)
+    # Per-index overrides applied on top of the sections above, e.g.
+    # underlyings: {BANKNIFTY: {risk: {max_premium: 900}}, SENSEX: {risk: {max_premium: 900}}}
+    underlyings: dict[str, dict] = Field(default_factory=dict)
+    active_underlyings: list[str] = Field(default_factory=lambda: ["NIFTY"])  # what ./morning.sh starts by default
     state_dir: str = "state"
     log_dir: str = "logs"
     project_dir: str = "."
+
+    def apply_underlying(self, name: str) -> "Config":
+        """Switch the config to another index: exchanges from the preset, then user overrides."""
+        name = name.strip().upper()
+        if name not in UNDERLYING_PRESETS:
+            raise ValueError(f"unknown underlying {name}; choose one of {', '.join(UNDERLYING_PRESETS)}")
+        self.instrument.underlying = name
+        self.instrument.underlying_exchange = UNDERLYING_PRESETS[name]["underlying_exchange"]
+        self.instrument.option_exchange = UNDERLYING_PRESETS[name]["option_exchange"]
+        self.instrument.signal_symbol = None
+        self.instrument.signal_exchange = None
+        for section, values in (self.underlyings.get(name) or {}).items():
+            target = getattr(self, section, None)
+            if target is None or not isinstance(values, dict):
+                raise ValueError(f"underlyings.{name}.{section}: unknown section or not a mapping")
+            for k, v in values.items():
+                if not hasattr(target, k):
+                    raise ValueError(f"underlyings.{name}.{section}.{k}: unknown setting")
+                setattr(target, k, v)
+        return self
+
+    @property
+    def index_state_dir(self) -> Path:
+        """state/<UNDERLYING>/ : each index runs as its own agent with its own journal, lock and run info."""
+        return Path(self.project_dir) / self.state_dir / self.instrument.underlying
 
     @property
     def signal_symbol(self) -> str:
@@ -112,7 +152,7 @@ class Config(BaseModel):
         return self.instrument.signal_exchange or self.instrument.underlying_exchange
 
 
-def load_config(path: str | Path = "config.yaml") -> Config:
+def load_config(path: str | Path = "config.yaml", underlying: str | None = None) -> Config:
     path = Path(path)
     project_dir = path.resolve().parent
     load_dotenv(project_dir / ".env")
@@ -121,6 +161,7 @@ def load_config(path: str | Path = "config.yaml") -> Config:
         raw = yaml.safe_load(path.read_text()) or {}
     cfg = Config(**raw)
     cfg.project_dir = str(project_dir)
+    cfg.apply_underlying(underlying or os.getenv("AGENT_UNDERLYING") or cfg.instrument.underlying)
     cfg.openalgo.api_key = os.getenv("OPENALGO_API_KEY", cfg.openalgo.api_key)
     cfg.openalgo.host = os.getenv("OPENALGO_HOST", cfg.openalgo.host)
     cfg.openalgo.ws_port = int(os.getenv("OPENALGO_WS_PORT", cfg.openalgo.ws_port))

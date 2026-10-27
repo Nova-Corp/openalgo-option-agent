@@ -221,7 +221,7 @@ class Engine:
         if not self.paper:
             log.warning("*** LIVE MODE: real orders will be sent to the broker. Max lots capped at %d ***", self.cfg.execution.live_max_lots)
         log.info("=" * 50)
-        self.journal = Journal(self.project / self.cfg.state_dir, now.date())
+        self.journal = Journal(self.cfg.index_state_dir, now.date())
         self.journal.data["mode"] = self.mode_name
         self.journal.save()
         self.stopped_reason = None
@@ -385,7 +385,7 @@ class Engine:
         trade = Trade.new(date=now.date().isoformat(), mode=self.mode_name, symbol=contract.symbol,
                           exchange=contract.exchange, option_type=sig.option_type, lots=lots,
                           qty=lots * contract.lotsize, signal=sig.reason, product=self.cfg.instrument.product,
-                          lotsize=contract.lotsize)
+                          lotsize=contract.lotsize, underlying=self.cfg.instrument.underlying)
         self.journal.add(trade)
         log.info("ENTER %s %s lots=%d qty=%d premium~%.2f expiry=%s", self.mode_name, contract.symbol, lots, trade.qty, premium, contract.expiry)
         try:

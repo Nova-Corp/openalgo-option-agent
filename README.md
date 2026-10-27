@@ -25,10 +25,39 @@ The virtual environment (`.venv`, Python 3.12) and dependencies are already inst
 cd ~/Documents/Trade && ./morning.sh
 ```
 
-Run this once in the morning. It opens OpenAlgo if needed, starts the agent and the dashboard if they are
-not running, waits until you have logged in to AliceBlue inside OpenAlgo, then opens the dashboard.
-That is the whole routine; the agent trades from 09:15, squares off at 15:10 and sleeps until the next
-session. (Optional: `./service.sh install` makes both start at login automatically.)
+Run this once in the morning. It opens OpenAlgo if needed, starts one agent per index plus the
+dashboard, waits until you have logged in to AliceBlue inside OpenAlgo, then opens the dashboard.
+That is the whole routine; each agent trades from 09:15, squares off at 15:10 and sleeps until the
+next session.
+
+**Is it running? Stop it.**
+
+```bash
+./run.sh status      # each index: running/stopped, today's trades, P&L; or look at the dashboard header
+./stop.sh            # square off any open trade, then stop every agent (dashboard keeps running)
+./stop.sh --keep     # stop the agents but leave open trades in OpenAlgo
+./stop.sh --all      # also stop the dashboard
+```
+
+`./morning.sh` starts them again. Stopping and starting between sessions is harmless; the agents are
+idle outside market hours anyway.
+
+**Choosing indices.** With no arguments it starts the list in `active_underlyings` in `config.yaml`.
+Name them to choose for the day:
+
+```bash
+./morning.sh NIFTY BANKNIFTY SENSEX
+```
+
+Each index is an independent agent with its own journal in `state/<INDEX>/`, its own lock, its own
+lots and its own daily loss limit, so three indices means up to three times the risk of one. Agents
+for indices you leave out are stopped, unless they have an open trade. Per-index settings live under
+`underlyings:` in `config.yaml` (BANKNIFTY and SENSEX get a wider premium window by default). Any
+command accepts `-u INDEX`, e.g. `./run.sh check -u SENSEX`, `./run.sh squareoff -u BANKNIFTY`.
+
+SENSEX note: AliceBlue's BSE contract master uses its own symbol style (`SENSEX29thOCT84000CE`), which
+OpenAlgo's option resolver does not understand. The agent detects that and resolves the contract itself
+through OpenAlgo's search endpoint, so SENSEX works end to end.
 
 ## 3. Daily use
 

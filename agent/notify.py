@@ -8,7 +8,7 @@ from pathlib import Path
 from rich.logging import RichHandler
 
 
-def setup_logging(log_dir: str | Path, level: str = "INFO") -> logging.Logger:
+def setup_logging(log_dir: str | Path, level: str = "INFO", name: str = "agent") -> logging.Logger:
     log_dir = Path(log_dir)
     log_dir.mkdir(parents=True, exist_ok=True)
     root = logging.getLogger()
@@ -18,7 +18,7 @@ def setup_logging(log_dir: str | Path, level: str = "INFO") -> logging.Logger:
     console = RichHandler(rich_tracebacks=False, show_path=False, markup=False)
     console.setLevel(getattr(logging, level.upper(), logging.INFO))
     console.setFormatter(logging.Formatter("%(name)s: %(message)s"))
-    fileh = RotatingFileHandler(log_dir / "agent.log", maxBytes=5_000_000, backupCount=10)
+    fileh = RotatingFileHandler(log_dir / f"{name}.log", maxBytes=5_000_000, backupCount=10)
     fileh.setLevel(logging.DEBUG)
     fileh.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
     root.addHandler(console)

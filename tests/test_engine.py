@@ -58,7 +58,7 @@ def test_full_day_target_hit(tmp_path):
     ])
     eng = Engine(make_cfg(tmp_path), b, clock)
     eng.run(max_iterations=40)
-    j = Journal(tmp_path / "state", DAY)
+    j = Journal(tmp_path / "state" / "NIFTY", DAY)
     ts = j.trades
     assert len(ts) == 1
     t = ts[0]
@@ -67,7 +67,7 @@ def test_full_day_target_hit(tmp_path):
     assert t.qty == 65 and t.pnl == 52 * 65
     assert t.exit_reason.startswith("TARGET")
     assert b.positions[opt] == 0
-    assert (tmp_path / "state" / "trades.csv").exists()
+    assert (tmp_path / "state" / "NIFTY" / "trades.csv").exists()
     assert t.mode == "paper"
 
 
@@ -80,7 +80,7 @@ def test_stoploss_and_no_reentry_same_direction(tmp_path):
     clock = ScriptedClock(start, [(start + timedelta(seconds=4), lambda: b.push(opt, "NFO", 70.0))])
     eng = Engine(make_cfg(tmp_path), b, clock)
     eng.run(max_iterations=400)  # runs through the 9:40 candle too
-    j = Journal(tmp_path / "state", DAY)
+    j = Journal(tmp_path / "state" / "NIFTY", DAY)
     assert len(j.trades) == 1 and j.trades[0].exit_reason.startswith("STOPLOSS")
     assert j.realized_pnl() == -30 * 65
 
@@ -101,7 +101,7 @@ def test_live_mode_caps_lots(tmp_path):
     cfg = make_cfg(tmp_path, allow_live=True, live_max_lots=1)
     eng = Engine(cfg, b, FakeClock(datetime(2026, 10, 27, 9, 35, 6, tzinfo=IST)))
     eng.run(max_iterations=3)
-    j = Journal(tmp_path / "state", DAY)
+    j = Journal(tmp_path / "state" / "NIFTY", DAY)
     assert j.trades[0].lots == 1 and j.trades[0].mode == "LIVE"
 
 
@@ -112,7 +112,7 @@ def test_rejected_entry_marked_failed(tmp_path):
     b.reject_next = True
     eng = Engine(make_cfg(tmp_path), b, FakeClock(datetime(2026, 10, 27, 9, 35, 6, tzinfo=IST)))
     eng.run(max_iterations=3)
-    j = Journal(tmp_path / "state", DAY)
+    j = Journal(tmp_path / "state" / "NIFTY", DAY)
     assert j.trades[0].status == "FAILED" and j.open_trade() is None
 
 
@@ -124,13 +124,13 @@ def test_restart_resumes_open_trade_and_square_off(tmp_path):
     b.set_ltp(opt, 100.0)
     eng = Engine(make_cfg(tmp_path), b, FakeClock(datetime(2026, 10, 27, 9, 35, 6, tzinfo=IST)))
     eng.run(max_iterations=3)
-    j = Journal(tmp_path / "state", DAY)
+    j = Journal(tmp_path / "state" / "NIFTY", DAY)
     assert j.open_trade() is not None and b.positions[opt] == 65
     # Restart just before square-off with the position still open at the broker.
     b.set_ltp(opt, 120.0)
     eng2 = Engine(make_cfg(tmp_path), b, FakeClock(datetime(2026, 10, 27, 15, 9, 58, tzinfo=IST)))
     eng2.run(max_iterations=10)
-    j2 = Journal(tmp_path / "state", DAY)
+    j2 = Journal(tmp_path / "state" / "NIFTY", DAY)
     t = j2.trades[0]
     assert t.status == "CLOSED" and t.exit_reason.startswith("square-off") and t.exit_price == 120.0
     assert b.positions[opt] == 0
@@ -148,7 +148,7 @@ def test_restart_when_position_closed_externally(tmp_path):
     b.place_order(opt, "NFO", "SELL", 65, "MIS")
     eng2 = Engine(make_cfg(tmp_path), b, FakeClock(datetime(2026, 10, 27, 9, 36, 0, tzinfo=IST)))
     eng2.run(max_iterations=2)
-    t = Journal(tmp_path / "state", DAY).trades[0]
+    t = Journal(tmp_path / "state" / "NIFTY", DAY).trades[0]
     assert t.status == "CLOSED" and "outside the agent" in t.exit_reason and t.exit_price == 90.0
 
 
@@ -161,7 +161,7 @@ def test_stop_file_squares_off(tmp_path):
     clock = ScriptedClock(start, [(start + timedelta(seconds=3), lambda: (tmp_path / "STOP").touch())])
     eng = Engine(make_cfg(tmp_path), b, clock)
     eng.run(max_iterations=50)
-    t = Journal(tmp_path / "state", DAY).trades[0]
+    t = Journal(tmp_path / "state" / "NIFTY", DAY).trades[0]
     assert t.status == "CLOSED" and "STOP" in t.exit_reason
     assert eng.stopped_reason == "STOP file"
 
@@ -183,7 +183,7 @@ def test_exit_timeout_then_position_check(tmp_path):
     cfg = make_cfg(tmp_path, fill_timeout_sec=5)
     eng = Engine(cfg, b, clock)
     eng.run(max_iterations=80)
-    t = Journal(tmp_path / "state", DAY).trades[0]
+    t = Journal(tmp_path / "state" / "NIFTY", DAY).trades[0]
     assert t.status == "CLOSED" and b.positions[opt] == 0
 
 
@@ -197,7 +197,7 @@ def test_entry_timeout_is_settled_from_position(tmp_path):
     clock = ScriptedClock(start, [(start + timedelta(seconds=10), lambda: b.push(opt, "NFO", 155.0))])
     eng = Engine(make_cfg(tmp_path), b, clock)
     eng.run(max_iterations=40)
-    t = Journal(tmp_path / "state", DAY).trades[0]
+    t = Journal(tmp_path / "state" / "NIFTY", DAY).trades[0]
     assert t.status == "CLOSED" and t.entry_price == 100.0 and t.exit_price == 155.0
     assert b.positions[opt] == 0 and sum(c.startswith("order:BUY") for c in b.calls) == 1
 
@@ -223,5 +223,5 @@ def test_run_forever_waits_then_trades_then_stops(tmp_path):
     ])
     eng = Engine(make_cfg(tmp_path), b, clock)
     eng.run_forever()
-    t = Journal(tmp_path / "state", DAY).trades[0]
+    t = Journal(tmp_path / "state" / "NIFTY", DAY).trades[0]
     assert t.status == "CLOSED" and t.exit_reason.startswith("TARGET")

@@ -88,7 +88,13 @@ class FakeBroker:
     def expiries(self, symbol, exchange):
         return list(self.expiry_list)
 
+    def search(self, query, exchange):
+        return [r for r in getattr(self, "contracts", []) if query in r["symbol"]]
+
     def option_symbol(self, underlying, exchange, expiry_date, offset, option_type):
+        if getattr(self, "optionsymbol_fails", False):
+            from agent.broker import BrokerError
+            raise BrokerError(f"optionsymbol: HTTP 404: No strikes found for {underlying} expiring {expiry_date}")
         u = self.ltp.get(underlying, 25000.0)
         strike = int(round(u / 50.0) * 50)
         return {"status": "success", "symbol": f"{underlying}{expiry_date}{strike}{option_type}", "exchange": "NFO",
