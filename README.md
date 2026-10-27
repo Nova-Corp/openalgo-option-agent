@@ -19,7 +19,18 @@ cp .env.example .env          # then paste your OpenAlgo API key into .env
 Your API key is in the OpenAlgo desktop app under **API Key** in the left menu.
 The virtual environment (`.venv`, Python 3.12) and dependencies are already installed.
 
-## 2. Daily use
+## 2. Every trading day
+
+```bash
+cd ~/Documents/Trade && ./morning.sh
+```
+
+Run this once in the morning. It opens OpenAlgo if needed, starts the agent and the dashboard if they are
+not running, waits until you have logged in to AliceBlue inside OpenAlgo, then opens the dashboard.
+That is the whole routine; the agent trades from 09:15, squares off at 15:10 and sleeps until the next
+session. (Optional: `./service.sh install` makes both start at login automatically.)
+
+## 3. Daily use
 
 | Command | What it does |
 |---|---|
@@ -32,6 +43,7 @@ The virtual environment (`.venv`, Python 3.12) and dependencies are already inst
 | `./run.sh journal` | Prints closed trades from `state/trades.csv` with total P&L |
 | `./run.sh dashboard` | Web UI at http://127.0.0.1:8787 : current position with live P&L, trade history with filters, auto refresh |
 | `./run.sh mode` | Shows analyzer state; `--paper` switches analyzer ON (safe direction only) |
+| `./run.sh ping` | Exit 0 when OpenAlgo has a broker session (used by morning.sh) |
 
 **Every morning before 09:15, log in to AliceBlue inside the OpenAlgo app.** Broker sessions expire
 daily; the agent pings OpenAlgo from 09:05 and logs "OpenAlgo not ready ... Log in to the broker"
@@ -47,7 +59,7 @@ Controls while it runs (no restart needed):
 Logs: console plus `logs/agent.log`. State: `state/<date>.json` (today's trades, stop levels) and
 `state/trades.csv` (all closed trades).
 
-## 3. The strategy (`orb_trend`)
+## 4. The strategy (`orb_trend`)
 
 Evaluated on every closed 5-minute candle of the underlying index:
 
@@ -74,7 +86,7 @@ the budget is skipped.
 All numbers live in `config.yaml`. The index has no volume, so VWAP falls back to a
 time-weighted average of typical price; set `signal_symbol` to the current-month future for a true VWAP.
 
-## 4. Reliability features
+## 5. Reliability features
 
 - **Mode latch**: refuses to run live unless analyzer is OFF *and* `allow_live: true`; re-checks mode every minute and squares off if it flips to live without permission.
 - **Fill confirmation**: every order is polled via `orderstatus`; on timeout the position is checked, unconfirmed orders are cancelled before anything is re-sent, so no duplicate exits.
@@ -84,7 +96,7 @@ time-weighted average of typical price; set `signal_symbol` to the current-month
 - **No retries on unknown order outcomes** (only on 429 rate limits), so a timeout never doubles an order.
 - Trading-day check via OpenAlgo holidays; unmanaged positions in the same underlying are logged, never touched.
 
-## 5. Going live (when you are ready)
+## 6. Going live (when you are ready)
 
 1. Paper trade for at least a few weeks; review `./run.sh journal` and `logs/agent.log`.
 2. In OpenAlgo: turn **Analyzer OFF**.
@@ -95,14 +107,14 @@ time-weighted average of typical price; set `signal_symbol` to the current-month
 To go back to paper: turn Analyzer ON (or `./run.sh mode --paper`). `allow_live` can stay true;
 the analyzer toggle alone decides whether orders are simulated.
 
-## 6. Backtest caveat
+## 7. Backtest caveat
 
 `backtest` replays the *signal* on real index candles, but the option premium is a **proxy**
 (entry premium = 0.35 % of index, moves with delta 0.5). It ignores theta decay and IV changes.
 Use it to compare rules, trade counts and hit rates, not as a P&L forecast. Judge the real
 behaviour from paper-trading results in `state/trades.csv`.
 
-## 7. Tests
+## 8. Tests
 
 ```bash
 source .venv/bin/activate && python -m pytest -q tests

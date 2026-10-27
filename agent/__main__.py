@@ -51,18 +51,39 @@ def cmd_check(cfg, args):
 def cmd_run(cfg, args):
     from .engine import Engine, ModeNotAllowed
 
-    eng = Engine(cfg, _broker(cfg))
+    from .lock import AlreadyRunning, SingleInstance
+
     try:
-        if args.forever:
-            eng.run_forever()
-        else:
-            eng.run()
+        with SingleInstance(Path(cfg.project_dir) / cfg.state_dir / "agent.lock"):
+            eng = Engine(cfg, _broker(cfg))
+            if args.forever:
+                eng.run_forever()
+            else:
+                eng.run()
+    except AlreadyRunning as e:
+        rprint(f"[bold red]{e}[/bold red]. Stop the other copy first (./service.sh stop, or Ctrl+C in its terminal).")
+        return 3
     except ModeNotAllowed as e:
         rprint(f"[bold red]{e}[/bold red]")
         return 2
     except KeyboardInterrupt:
         rprint("[yellow]interrupted; open position (if any) is still live in OpenAlgo. Use `squareoff` to flatten.[/yellow]")
         return 130
+    return 0
+
+
+def cmd_ping(cfg, args):
+    """Exit 0 when OpenAlgo answers with a broker session, 1 otherwise (used by morning.sh)."""
+    from .broker import BrokerError
+
+    try:
+        b = _broker(cfg)
+        info = b.ping()
+        paper = b.analyzer_mode()
+    except BrokerError as e:
+        rprint(f"[red]not ready:[/red] {e}")
+        return 1
+    rprint(f"broker {info.get('broker')} logged in; mode {'PAPER' if paper else '[bold red]LIVE[/bold red]'}")
     return 0
 
 
@@ -170,6 +191,7 @@ def main(argv=None) -> int:
     rn = sub.add_parser("run", help="run the trading loop for today")
     rn.add_argument("--forever", action="store_true", help="keep running: wait for the next session, trade, repeat")
     sub.add_parser("status", help="mode, funds, today's trades, open positions")
+    sub.add_parser("ping", help="exit 0 if OpenAlgo has a broker session")
     sq = sub.add_parser("squareoff", help="exit the journal's open trade now")
     sq.add_argument("--all", action="store_true", help="also call OpenAlgo closeposition for every position")
     md = sub.add_parser("mode", help="show analyzer mode; --paper switches analyzer ON")
@@ -192,7 +214,7 @@ def main(argv=None) -> int:
     try:
         return {"check": cmd_check, "run": cmd_run, "status": cmd_status, "squareoff": cmd_squareoff,
                 "mode": cmd_mode, "backtest": cmd_backtest, "journal": cmd_journal,
-                "dashboard": cmd_dashboard}[args.cmd](cfg, args)
+                "dashboard": cmd_dashboard, "ping": cmd_ping}[args.cmd](cfg, args)
     except BrokerError as e:
         rprint(f"[bold red]OpenAlgo error:[/bold red] {e}")
         return 1
