@@ -41,6 +41,10 @@
   .open-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(140px, 1fr)); gap:8px 16px; }
   .open-grid div b { display:block; font-size:12px; color:var(--muted); font-weight:500; }
   .err { color:var(--red); font-size:12px; }
+  .chart { height:320px; width:100%; }
+  .chart.small { height:220px; }
+  .legend { display:flex; flex-wrap:wrap; gap:4px 14px; font-size:12px; color:var(--muted); margin:4px 0 6px; }
+  .legend i { display:inline-block; width:10px; height:3px; vertical-align:middle; margin-right:5px; border-radius:2px; }
   @media (max-width:600px) { header h1 { width:100%; } }
 </style>
 </head>
@@ -65,6 +69,21 @@
     <div class="card"><div class="k">Avg win / loss</div><div class="v" id="c_avg" style="font-size:16px">–</div></div>
     <div class="card"><div class="k">Sandbox / broker cash</div><div class="v" id="c_cash" style="font-size:16px">–</div></div>
   </div>
+
+  <section id="charts">
+    <h2>Trade chart</h2>
+    <div class="filters">
+      <label>Index <select id="ch_index"></select></label>
+      <label>Date <input type="date" id="ch_date"></label>
+      <label>Trade <select id="ch_trade"><option value="">all</option></select></label>
+      <span id="ch_info" class="muted"></span>
+    </div>
+    <div class="legend"><span><i style="background:#2962ff"></i>EMA fast</span><span><i style="background:#ff6d00"></i>EMA slow</span><span><i style="background:#9c27b0"></i>VWAP</span><span><i style="background:#d29922"></i>opening range</span><span>▲▼ breakout</span><span>● entry  ✕ exit</span></div>
+    <div id="chart_u" class="chart"></div>
+    <div class="legend" style="margin-top:10px"><span><i style="background:#26a69a"></i>premium</span><span><i style="background:#8b949e"></i>entry</span><span><i style="background:#ef5350"></i>stop (steps up as it trails)</span><span><i style="background:#26a69a"></i>target</span></div>
+    <div id="chart_p" class="chart small"></div>
+    <div id="chart_empty" class="muted" style="padding:8px 0; display:none"></div>
+  </section>
 
   <section id="open">
     <h2>Current positions <span id="agents" class="muted" style="font-weight:normal"></span></h2>
@@ -110,6 +129,7 @@
     <pre id="log"></pre>
   </section>
 </main>
+<script src="/static/lightweight-charts.js"></script>
 <script>
 (function () {
   const $ = id => document.getElementById(id);
@@ -201,23 +221,23 @@
   }
   function set(id, v, money) { const el = $(id); el.textContent = v == null ? '–' : (money ? '₹' : '') + fmt(v); el.className = 'v ' + sign(v); }
 
-  async function load() {
+  let load = async function () {
     try {
       const r = await fetch('/api/summary', {cache: 'no-store'});
       data = await r.json();
       render();
     } catch (e) { $('updated').textContent = 'refresh failed: ' + e; }
-  }
+  };
   function schedule() {
     clearInterval(timer);
-    if ($('auto').checked) timer = setInterval(load, Number($('interval').value) * 1000);
+    if ($('auto').checked) timer = setInterval(() => load(), Number($('interval').value) * 1000);
   }
 
   ['f_from', 'f_to', 'f_und', 'f_type', 'f_status', 'f_mode', 'f_reason'].forEach(id => $(id).addEventListener('input', () => { saveFilters(); render(); }));
   $('clear').onclick = () => { ['f_from', 'f_to', 'f_und', 'f_type', 'f_status', 'f_mode', 'f_reason'].forEach(id => $(id).value = ''); saveFilters(); render(); };
   $('today').onclick = () => { $('f_from').value = $('f_to').value = data ? data.today : ''; saveFilters(); render(); };
   $('week').onclick = () => { const d = new Date(); $('f_to').value = d.toISOString().slice(0, 10); d.setDate(d.getDate() - 7); $('f_from').value = d.toISOString().slice(0, 10); saveFilters(); render(); };
-  $('refresh').onclick = load; $('auto').onchange = schedule; $('interval').onchange = schedule;
+  $('refresh').onclick = () => load(); $('auto').onchange = schedule; $('interval').onchange = schedule;
   $('csv').onclick = () => {
     const cols = ['date', 'entry_time', 'exit_time', 'underlying', 'symbol', 'option_type', 'mode', 'lots', 'qty', 'entry_price', 'exit_price', 'pnl', 'status', 'exit_reason', 'signal'];
     const esc = v => '"' + String(v ?? '').replace(/"/g, '""') + '"';
@@ -225,6 +245,99 @@
     const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([lines.join('\n')], {type: 'text/csv'})); a.download = 'trades.csv'; a.click();
   };
   document.querySelectorAll('th[data-k]').forEach(th => th.onclick = () => { const k = th.dataset.k; sortDir = (sortKey === k) ? -sortDir : -1; sortKey = k; render(); });
+  // ---------------- charts ----------------
+  const dark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+  const chartOpts = h => ({ height: h, autoSize: true, layout: { background: { color: 'transparent' }, textColor: dark ? '#8b949e' : '#57606a' },
+    grid: { vertLines: { color: dark ? '#21262d' : '#eaeef2' }, horzLines: { color: dark ? '#21262d' : '#eaeef2' } },
+    timeScale: { timeVisible: true, secondsVisible: false, borderColor: dark ? '#30363d' : '#d0d7de' },
+    rightPriceScale: { borderColor: dark ? '#30363d' : '#d0d7de' }, crosshair: { mode: 0 },
+    handleScroll: { mouseWheel: false, pressedMouseMove: true }, handleScale: { mouseWheel: false, pinch: true, axisPressedMouseMove: true } });
+  let chU = null, chP = null, seriesU = [], seriesP = [], chartData = null, chartKey = '';
+  function resetChart(ch, list) { list.forEach(s => { try { ch.removeSeries(s); } catch (e) {} }); list.length = 0; }
+  function toCandleTime(ts, cands) {  // snap an event time to the candle that contains it
+    if (ts == null || !cands.length) return null;
+    let c = cands[0].time; for (const k of cands) { if (k.time <= ts) c = k.time; else break; } return c;
+  }
+  async function loadChart(force) {
+    if (!window.LightweightCharts) return;
+    const idx = $('ch_index').value || (data && data.config.indices[0]) || 'NIFTY';
+    const day = $('ch_date').value || (data ? data.today : '');
+    if (!idx || !day) return;
+    const key = idx + '|' + day;
+    try {
+      const r = await fetch(`/api/chart?index=${idx}&date=${day}`, { cache: 'no-store' });
+      chartData = await r.json();
+    } catch (e) { $('chart_empty').style.display = ''; $('chart_empty').textContent = 'chart load failed: ' + e; return; }
+    if (chartData.error) { $('chart_empty').style.display = ''; $('chart_empty').textContent = chartData.error; return; }
+    const sel = $('ch_trade'); const prev = sel.value;
+    if (key !== chartKey) { sel.innerHTML = '<option value="">all</option>'; chartData.trades.forEach((t, i) => { const o = document.createElement('option'); o.value = String(i); o.textContent = `${t.option_type} ${t.symbol} ${hhmm(t.entry_time)} ${t.status === 'CLOSED' ? (t.pnl >= 0 ? '+' : '') + fmt(t.pnl) : t.status}`; sel.appendChild(o); }); chartKey = key; }
+    else if (prev) sel.value = prev;
+    drawCharts();
+  }
+  function drawCharts() {
+    const d = chartData; if (!d) return;
+    if (!chU) { chU = LightweightCharts.createChart($('chart_u'), chartOpts(320)); chP = LightweightCharts.createChart($('chart_p'), chartOpts(220));
+      new ResizeObserver(() => { chU.timeScale().fitContent(); chP.timeScale().fitContent(); }).observe($('chart_u')); }
+    resetChart(chU, seriesU); resetChart(chP, seriesP);
+    const cands = d.candles || [];
+    if (!cands.length) { $('chart_empty').style.display = ''; $('chart_empty').textContent = `no candles for ${d.index} on ${d.date}`; return; }
+    $('chart_empty').style.display = 'none';
+    const cs = chU.addCandlestickSeries({ upColor: '#26a69a', downColor: '#ef5350', wickUpColor: '#26a69a', wickDownColor: '#ef5350', borderVisible: false }); seriesU.push(cs);
+    cs.setData(cands.map(c => ({ time: c.time, open: c.open, high: c.high, low: c.low, close: c.close })));
+    const line = (ch, list, color, width, extra) => { const s = ch.addLineSeries(Object.assign({ color, lineWidth: width, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false }, extra || {})); list.push(s); return s; };
+    line(chU, seriesU, '#2962ff', 1).setData(cands.map(c => ({ time: c.time, value: c.ema_fast })));
+    line(chU, seriesU, '#ff6d00', 1).setData(cands.map(c => ({ time: c.time, value: c.ema_slow })));
+    line(chU, seriesU, '#9c27b0', 2).setData(cands.map(c => ({ time: c.time, value: c.vwap })));
+    if (d.orb) {
+      const after = cands.filter(c => c.time >= d.orb.end);
+      const band = (v) => after.map(c => ({ time: c.time, value: v }));
+      line(chU, seriesU, '#d29922', 1, { lineStyle: 2 }).setData(band(d.orb.high));
+      line(chU, seriesU, '#d29922', 1, { lineStyle: 2 }).setData(band(d.orb.low));
+    }
+    const sel = $('ch_trade').value; const trades = sel === '' ? d.trades : [d.trades[Number(sel)]].filter(Boolean);
+    const marks = [];
+    for (const t of trades) {
+      const ce = t.option_type === 'CE';
+      const bt = toCandleTime(t.signal_time_ts, cands), et = toCandleTime(t.entry_time_ts, cands), xt = toCandleTime(t.exit_time_ts, cands);
+      if (bt) marks.push({ time: bt, position: ce ? 'belowBar' : 'aboveBar', color: ce ? '#26a69a' : '#ef5350', shape: ce ? 'arrowUp' : 'arrowDown', text: 'breakout' });
+      if (et) marks.push({ time: et, position: 'inBar', color: '#2962ff', shape: 'circle', text: `buy ${t.option_type} ${fmt(t.entry_price)}` });
+      if (xt && t.status === 'CLOSED') marks.push({ time: xt, position: ce ? 'aboveBar' : 'belowBar', color: t.pnl >= 0 ? '#26a69a' : '#ef5350', shape: 'square', text: `exit ${(t.pnl >= 0 ? '+' : '') + fmt(t.pnl)} ${(t.exit_reason || '').split(' ')[0]}` });
+    }
+    marks.sort((a, b) => a.time - b.time); cs.setMarkers(marks);
+    chU.timeScale().fitContent();
+    // premium chart: one trade at a time (the selected one, else the latest of the day)
+    const t = sel === '' ? d.trades[d.trades.length - 1] : d.trades[Number(sel)];
+    if (!t) { $('ch_info').textContent = `${d.trades.length ? '' : 'no trades this day · '}${cands.length} candles`; return; }
+    const prem = t.premium || [];
+    $('ch_info').textContent = `${t.symbol} · entry ${fmt(t.entry_price)} · ${t.status === 'CLOSED' ? 'exit ' + fmt(t.exit_price) + ' · P&L ' + fmt(t.pnl) : t.status} · ${t.exit_reason || ''}${prem.length ? '' : ' · (no premium data recorded for this trade)'}`;
+    if (!prem.length) return;
+    const ps = chP.addLineSeries({ color: '#26a69a', lineWidth: 2, priceLineVisible: false }); seriesP.push(ps); ps.setData(prem);
+    const t0 = prem[0].time, t1 = prem[prem.length - 1].time;
+    const flat = v => [{ time: t0, value: v }, { time: t1, value: v }];
+    line(chP, seriesP, '#8b949e', 1, { lineStyle: 2 }).setData(flat(t.entry_price));
+    const hist = (t.stop_history || []).filter(h => h.time != null).sort((a, b) => a.time - b.time);
+    if (hist.length) {
+      const tgt = hist[hist.length - 1].target; line(chP, seriesP, '#26a69a', 1, { lineStyle: 2 }).setData(flat(tgt));
+      const stepPts = []; let lastT = -1;
+      hist.forEach(h => { const tt = Math.max(h.time, t0); if (tt > lastT) { stepPts.push({ time: tt, value: h.stop }); lastT = tt; } else { stepPts[stepPts.length - 1].value = h.stop; } });
+      if (stepPts[stepPts.length - 1].time < t1) stepPts.push({ time: t1, value: stepPts[stepPts.length - 1].value });
+      line(chP, seriesP, '#ef5350', 2, { lineType: 1 }).setData(stepPts);
+    } else if (t.stop && t.stop.stop) { line(chP, seriesP, '#ef5350', 2).setData(flat(t.stop.stop)); line(chP, seriesP, '#26a69a', 1, { lineStyle: 2 }).setData(flat(t.stop.target)); }
+    const pm = [{ time: t0, position: 'belowBar', color: '#2962ff', shape: 'circle', text: 'entry' }];
+    if (t.status === 'CLOSED') pm.push({ time: t1, position: 'aboveBar', color: t.pnl >= 0 ? '#26a69a' : '#ef5350', shape: 'square', text: (t.exit_reason || 'exit').split(' ')[0] });
+    ps.setMarkers(pm); chP.timeScale().fitContent();
+  }
+  function initChartControls() {
+    if (!data) return;
+    const sel = $('ch_index');
+    if (!sel.options.length) { (data.config.indices || ['NIFTY']).forEach(i => { const o = document.createElement('option'); o.value = i; o.textContent = i; sel.appendChild(o); }); try { const v = localStorage.getItem('oa_ch_index'); if (v) sel.value = v; } catch (e) {} }
+    if (!$('ch_date').value) $('ch_date').value = data.today;
+  }
+  $('ch_index').onchange = () => { try { localStorage.setItem('oa_ch_index', $('ch_index').value); } catch (e) {} loadChart(true); };
+  $('ch_date').onchange = () => loadChart(true);
+  $('ch_trade').onchange = drawCharts;
+  const _load = load;
+  load = async function () { await _load(); initChartControls(); loadChart(false); };
   loadFilters(); load(); schedule();
 })();
 </script>

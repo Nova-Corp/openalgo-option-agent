@@ -68,3 +68,37 @@ def test_summary_survives_broker_outage(tmp_path):
     p = Summary(cfg, Dead(make_candles(date(2026, 10, 27), [25000])), cache_sec=0).build()
     assert p["broker"]["ok"] is False and "refused" in p["broker"]["error"]
     assert len(p["trades"]) == 2
+
+
+def test_chart_api(tmp_path):
+    import urllib.request
+    from datetime import datetime as _dt
+
+    from agent.clock import IST
+    from agent.dashboard import ChartData
+
+    cfg = Config()
+    cfg.project_dir = str(tmp_path)
+    day = date(2026, 10, 27)
+    closes = [25000, 25020, 25010, 25060] + [25070 + i * 3 for i in range(71)]
+    b = FakeBroker(make_candles(day, closes))
+    j = Journal(tmp_path / "state" / "NIFTY", day)
+    t = Trade.new(date=day.isoformat(), mode="paper", symbol="NIFTY27OCT2625050CE", exchange="NFO", option_type="CE",
+                  lots=1, qty=65, entry_price=100, exit_price=150, pnl=3250, status="CLOSED", exit_reason="TARGET",
+                  entry_time="2026-10-27T09:35:06+05:30", exit_time="2026-10-27T09:35:18+05:30",
+                  signal_time="2026-10-27T09:35:00+05:30", orb_high=25035, orb_low=24990,
+                  stop_history=[{"t": "2026-10-27T09:35:06+05:30", "stop": 75, "target": 150},
+                                {"t": "2026-10-27T09:35:10+05:30", "stop": 100, "target": 150}])
+    j.add(t)
+    (tmp_path / "state" / "NIFTY" / f"ticks-{t.id}.csv").write_text(
+        "time,ltp\n2026-10-27T09:35:06+05:30,100.0\n2026-10-27T09:35:10+05:30,118.0\n2026-10-27T09:35:18+05:30,152.0\n")
+    cd = ChartData(cfg, b)
+    p = cd.build("NIFTY", day)
+    assert len(p["candles"]) == 75 and p["candles"][0]["time"] == int(_dt(2026, 10, 27, 9, 15, tzinfo=IST).timestamp()) + 19800
+    assert p["orb"]["high"] > p["orb"]["low"] and p["orb"]["end"] - p["orb"]["start"] == 900
+    tr = p["trades"][0]
+    assert tr["premium_source"] == "ticks" and [x["value"] for x in tr["premium"]] == [100.0, 118.0, 152.0]
+    assert tr["stop_history"][1]["stop"] == 100 and tr["entry_time_ts"] and tr["signal_time_ts"]
+    assert "ema_fast" in p["candles"][-1] and "vwap" in p["candles"][-1]
+    # cached second call
+    assert cd.build("NIFTY", day)["candles"] == p["candles"]

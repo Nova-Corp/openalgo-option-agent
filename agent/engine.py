@@ -198,6 +198,7 @@ class Engine:
                 t.status = "OPEN"
                 self.journal.update(t)
                 self.stop_mgr = StopManager(self.cfg.risk, StopState.from_dict(t.stop)) if t.stop else StopManager.new(self.cfg.risk, t.entry_price)
+                self._last_stop_persist = dict(self.stop_mgr.s.to_dict())
                 self.feed.subscribe(t.symbol, t.exchange)
                 log.warning("RESUMED open trade %s x%d @ %.2f stop=%.2f", t.symbol, t.qty, t.entry_price, self.stop_mgr.s.stop)
         # Positions we did not open
@@ -294,6 +295,7 @@ class Engine:
         if trade and self.stop_mgr:
             ltp = self.feed.ltp(trade.symbol, trade.exchange)
             if ltp:
+                self._log_tick(trade, ltp, now)
                 reason = self.stop_mgr.update(ltp)
                 self._persist_stop(trade)
                 if reason:
@@ -385,7 +387,9 @@ class Engine:
         trade = Trade.new(date=now.date().isoformat(), mode=self.mode_name, symbol=contract.symbol,
                           exchange=contract.exchange, option_type=sig.option_type, lots=lots,
                           qty=lots * contract.lotsize, signal=sig.reason, product=self.cfg.instrument.product,
-                          lotsize=contract.lotsize, underlying=self.cfg.instrument.underlying)
+                          lotsize=contract.lotsize, underlying=self.cfg.instrument.underlying,
+                          orb_high=sig.orb_high, orb_low=sig.orb_low,
+                          signal_time=(sig.candle_time + timedelta(seconds=self.candles.secs)).isoformat(timespec="seconds"))
         self.journal.add(trade)
         log.info("ENTER %s %s lots=%d qty=%d premium~%.2f expiry=%s", self.mode_name, contract.symbol, lots, trade.qty, premium, contract.expiry)
         try:
@@ -411,6 +415,8 @@ class Engine:
             trade = self.journal.open_trade()
         self.stop_mgr = StopManager.new(self.cfg.risk, trade.entry_price)
         trade.stop = self.stop_mgr.s.to_dict()
+        trade.stop_history = [{"t": trade.entry_time, "stop": self.stop_mgr.s.stop, "target": self.stop_mgr.s.target}]
+        self._last_stop_persist = dict(trade.stop)
         self.journal.update(trade)
         self.feed.subscribe(trade.symbol, trade.exchange)
         self.notifier.send(f"[{self.mode_name}] BUY {trade.symbol} x{trade.qty} @ {trade.entry_price:.2f} "
@@ -449,5 +455,19 @@ class Engine:
         d = self.stop_mgr.s.to_dict()
         if d != self._last_stop_persist:
             trade.stop = d
+            if not self._last_stop_persist or d["stop"] != self._last_stop_persist.get("stop") or d["target"] != self._last_stop_persist.get("target"):
+                trade.stop_history.append({"t": self.clock.now().isoformat(timespec="seconds"), "stop": d["stop"], "target": d["target"]})
             self.journal.update(trade)  # type: ignore[union-attr]
             self._last_stop_persist = dict(d)
+
+    def _log_tick(self, trade: Trade, ltp: float, now: datetime) -> None:
+        """Append the option premium to state/<INDEX>/ticks-<trade id>.csv (one line per poll) for the charts."""
+        try:
+            path = self.cfg.index_state_dir / f"ticks-{trade.id}.csv"
+            new = not path.exists()
+            with path.open("a") as f:
+                if new:
+                    f.write("time,ltp\n")
+                f.write(f"{now.isoformat(timespec='seconds')},{ltp}\n")
+        except OSError as e:
+            log.debug("tick log failed: %s", e)

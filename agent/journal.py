@@ -41,6 +41,10 @@ class Trade:
     product: str = "MIS"
     lotsize: int = 0
     underlying: str = ""
+    orb_high: float = 0.0
+    orb_low: float = 0.0
+    signal_time: str = ""  # close time of the breakout candle
+    stop_history: list = field(default_factory=list)  # [{"t": iso, "stop": x, "target": y}]
 
     @staticmethod
     def new(**kw) -> "Trade":

@@ -70,7 +70,7 @@ through OpenAlgo's search endpoint, so SENSEX works end to end.
 | `./run.sh squareoff` | Exits the agent's open trade now (`--all` also runs OpenAlgo *closeposition*) |
 | `./run.sh backtest --days 20` | Replays the signal on history with a premium proxy (see §6) |
 | `./run.sh journal` | Prints closed trades from `state/trades.csv` with total P&L |
-| `./run.sh dashboard` | Web UI at http://127.0.0.1:8787 : current position with live P&L, trade history with filters, auto refresh |
+| `./run.sh dashboard` | Web UI at http://127.0.0.1:8787 : current positions with live P&L, trade charts, trade history with filters, auto refresh |
 | `./run.sh mode` | Shows analyzer state; `--paper` switches analyzer ON (safe direction only) |
 | `./run.sh ping` | Exit 0 when OpenAlgo has a broker session (used by morning.sh) |
 
@@ -87,6 +87,20 @@ Controls while it runs (no restart needed):
 
 Logs: console plus `logs/agent.log`. State: `state/<date>.json` (today's trades, stop levels) and
 `state/trades.csv` (all closed trades).
+
+## 3b. Trade charts
+
+The dashboard's "Trade chart" section draws, for any index and day:
+
+- the underlying's 5-minute candles with EMA fast/slow, VWAP, the opening range (dashed band from
+  09:30 on), a ▲/▼ on the breakout candle, ● at entry and ■ at exit with the P&L;
+- the option premium of the selected trade with the entry line, the target line and the stop as a
+  stepped line that rises when breakeven and trailing kick in.
+
+Premium data comes from `state/<INDEX>/ticks-<trade id>.csv`, which the agent writes once per second
+while a trade is open (from 28 Oct 2026 on). For trades without a tick file the chart falls back to the
+option's 1-minute history from OpenAlgo while the contract is alive. The chart library (TradingView
+Lightweight Charts, Apache-2.0) is bundled in `agent/static/`, so the page works offline.
 
 ## 4. The strategy (`orb_trend`)
 

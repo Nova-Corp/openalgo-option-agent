@@ -225,3 +225,24 @@ def test_run_forever_waits_then_trades_then_stops(tmp_path):
     eng.run_forever()
     t = Journal(tmp_path / "state" / "NIFTY", DAY).trades[0]
     assert t.status == "CLOSED" and t.exit_reason.startswith("TARGET")
+
+
+def test_chart_data_is_recorded(tmp_path):
+    b = FakeBroker(candles())
+    b.set_ltp("NIFTY", 25060)
+    opt = "NIFTY27OCT2625050CE"
+    b.set_ltp(opt, 100.0)
+    start = datetime(2026, 10, 27, 9, 35, 6, tzinfo=IST)
+    clock = ScriptedClock(start, [
+        (start + timedelta(seconds=4), lambda: b.push(opt, "NFO", 118.0)),   # breakeven -> stop moves to 100
+        (start + timedelta(seconds=8), lambda: b.push(opt, "NFO", 130.0)),   # trailing -> stop 114.4
+        (start + timedelta(seconds=12), lambda: b.push(opt, "NFO", 152.0)),  # target
+    ])
+    eng = Engine(make_cfg(tmp_path), b, clock)
+    eng.run(max_iterations=40)
+    t = Journal(tmp_path / "state" / "NIFTY", DAY).trades[0]
+    assert t.orb_high > t.orb_low > 0 and t.signal_time.startswith("2026-10-27T09:35")
+    stops = [h["stop"] for h in t.stop_history]
+    assert stops[0] == 75.0 and 100.0 in stops and round(130 * 0.88, 2) in stops
+    ticks = (tmp_path / "state" / "NIFTY" / f"ticks-{t.id}.csv").read_text().splitlines()
+    assert ticks[0] == "time,ltp" and any(l.endswith(",152.0") for l in ticks) and len(ticks) >= 4

@@ -5,18 +5,28 @@ Reads the journal files in state/ and asks OpenAlgo for mode, funds, LTP and pos
 """
 from __future__ import annotations
 
+import copy
+import csv
 import json
 import logging
 import threading
 import time
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from .broker import BrokerError
 from .clock import IST
 from .config import Config
+from .data import add_indicators
 from .journal import Trade
+
+STATIC_DIR = Path(__file__).with_name("static")
+IST_OFFSET = 19800  # chart library renders UTC; shift epochs so the axis shows IST
+
+
+def _chart_time(ts) -> int:
+    return int(ts.timestamp()) + IST_OFFSET
 
 log = logging.getLogger("agent.dashboard")
 
@@ -140,6 +150,7 @@ class Summary:
                     "capital": self.cfg.risk.capital,
                     "allow_live": self.cfg.execution.allow_live,
                     "active_underlyings": self.active,
+                    "indices": sorted(p.name for p in self.state_dir.iterdir() if p.is_dir()) or ["NIFTY"],
                     "square_off": self.cfg.risk.square_off_time,
                     "max_daily_loss": self.cfg.risk.capital * self.cfg.risk.max_daily_loss_pct / 100,
                 },
@@ -153,7 +164,115 @@ class Summary:
             return payload
 
 
+class ChartData:
+    """Builds /api/chart payloads: a day's candles with indicators, ORB, trades, premium paths."""
+
+    def __init__(self, cfg: Config, broker):
+        self.cfg = cfg
+        self.broker = broker
+        self.state_dir = Path(cfg.project_dir) / cfg.state_dir
+        self._lock = threading.Lock()
+        self._candles: dict[tuple[str, str], tuple[float, list]] = {}
+
+    def _cfg_for(self, index: str) -> Config:
+        c = copy.deepcopy(self.cfg)
+        c.apply_underlying(index)
+        return c
+
+    def candles(self, index: str, day: date) -> list[dict]:
+        key = (index, day.isoformat())
+        today = datetime.now(IST).date()
+        ttl = 60 if day >= today else 24 * 3600
+        with self._lock:
+            hit = self._candles.get(key)
+            if hit and time.monotonic() - hit[0] < ttl:
+                return hit[1]
+        c = self._cfg_for(index)
+        start = (day - timedelta(days=c.strategy.history_days + 4)).isoformat()
+        df = self.broker.history(c.signal_symbol, c.signal_exchange, c.strategy.candle_interval, start, day.isoformat())
+        if df.index.tz is None:
+            df.index = df.index.tz_localize(IST)
+        else:
+            df.index = df.index.tz_convert(IST)
+        df = add_indicators(df, c.strategy.ema_fast, c.strategy.ema_slow)
+        rows = []
+        for ts, r in df[df.index.date == day].iterrows():
+            rows.append({"time": _chart_time(ts), "open": float(r["open"]), "high": float(r["high"]), "low": float(r["low"]),
+                         "close": float(r["close"]), "ema_fast": round(float(r["ema_fast"]), 2),
+                         "ema_slow": round(float(r["ema_slow"]), 2), "vwap": round(float(r["vwap"]), 2)})
+        with self._lock:
+            self._candles[key] = (time.monotonic(), rows)
+        return rows
+
+    def _premium(self, index: str, t: dict, day: date) -> tuple[list[dict], str]:
+        path = self.state_dir / index / f"ticks-{t['id']}.csv"
+        if path.exists():
+            out, last = [], None
+            with path.open() as f:
+                for row in csv.DictReader(f):
+                    try:
+                        tt = _chart_time(datetime.fromisoformat(row["time"]))
+                        if tt == last:
+                            continue
+                        out.append({"time": tt, "value": float(row["ltp"])})
+                        last = tt
+                    except (ValueError, KeyError):
+                        continue
+            if out:
+                return out, "ticks"
+        try:  # fall back to the option's own 1-minute history (works while the contract is alive)
+            df = self.broker.history(t["symbol"], t["exchange"], "1m", day.isoformat(), day.isoformat())
+            if df.index.tz is None:
+                df.index = df.index.tz_localize(IST)
+            else:
+                df.index = df.index.tz_convert(IST)
+            df = df[df.index.date == day]
+            return [{"time": _chart_time(ts), "value": float(r["close"])} for ts, r in df.iterrows()], "history"
+        except Exception as e:
+            log.debug("premium history unavailable for %s: %s", t["symbol"], e)
+            return [], "none"
+
+    def build(self, index: str, day: date) -> dict:
+        c = self._cfg_for(index)
+        candles = self.candles(index, day)
+        orb = None
+        if candles:
+            secs = int(c.strategy.opening_range_minutes) * 60
+            open_t = candles[0]["time"]
+            inside = [x for x in candles if x["time"] < open_t + secs]
+            if len(inside) * (60 * int(c.strategy.candle_interval[:-1])) >= secs:
+                orb = {"high": max(x["high"] for x in inside), "low": min(x["low"] for x in inside),
+                       "start": open_t, "end": open_t + secs}
+        trades = []
+        jpath = self.state_dir / index / f"{day.isoformat()}.json"
+        if jpath.exists():
+            try:
+                for raw in json.loads(jpath.read_text()).get("trades", []):
+                    t = Trade.from_dict(raw).to_dict()
+                    if t["status"] == "FAILED":
+                        continue
+                    prem, src = self._premium(index, t, day)
+                    t["premium"] = prem
+                    t["premium_source"] = src
+                    for h in t.get("stop_history") or []:
+                        try:
+                            h["time"] = _chart_time(datetime.fromisoformat(h["t"]))
+                        except (ValueError, KeyError):
+                            pass
+                    for k in ("entry_time", "exit_time", "signal_time"):
+                        try:
+                            t[k + "_ts"] = _chart_time(datetime.fromisoformat(t[k])) if t.get(k) else None
+                        except ValueError:
+                            t[k + "_ts"] = None
+                    trades.append(t)
+            except (OSError, json.JSONDecodeError):
+                pass
+        return {"index": index, "date": day.isoformat(), "interval": c.strategy.candle_interval, "candles": candles,
+                "orb": orb, "trades": trades, "ema": [c.strategy.ema_fast, c.strategy.ema_slow]}
+
+
 class Handler(BaseHTTPRequestHandler):
+    chart: ChartData  # set by serve()
     summary: Summary  # set by serve()
 
     def log_message(self, fmt, *args):  # the page polls every few seconds; do not fill the log with it
@@ -171,6 +290,25 @@ class Handler(BaseHTTPRequestHandler):
         path = self.path.split("?", 1)[0]
         if path in ("/", "/index.html"):
             self._send(200, HTML_PATH.read_bytes(), "text/html; charset=utf-8")
+        elif path.startswith("/static/"):
+            f = (STATIC_DIR / path[len("/static/"):]).resolve()
+            if f.is_file() and STATIC_DIR.resolve() in f.parents:
+                ctype = "application/javascript" if f.suffix == ".js" else "text/plain"
+                self._send(200, f.read_bytes(), ctype)
+            else:
+                self._send(404, b"not found", "text/plain")
+        elif path == "/api/chart":
+            from urllib.parse import parse_qs
+
+            q = parse_qs(self.path.split("?", 1)[1]) if "?" in self.path else {}
+            index = (q.get("index") or ["NIFTY"])[0].upper()
+            try:
+                day = date.fromisoformat((q.get("date") or [datetime.now(IST).date().isoformat()])[0])
+                body = json.dumps(self.chart.build(index, day), default=str).encode()
+                self._send(200, body, "application/json")
+            except Exception as e:
+                log.exception("chart failed")
+                self._send(500, json.dumps({"error": str(e)}).encode(), "application/json")
         elif path == "/api/summary":
             try:
                 body = json.dumps(self.summary.build(), default=str).encode()
@@ -184,6 +322,7 @@ class Handler(BaseHTTPRequestHandler):
 
 def serve(cfg: Config, broker, host: str = "127.0.0.1", port: int = 8787) -> None:
     Handler.summary = Summary(cfg, broker)
+    Handler.chart = ChartData(cfg, broker)
     srv = ThreadingHTTPServer((host, port), Handler)
     log.info("dashboard at http://%s:%d/  (Ctrl+C to stop)", host, port)
     try:
