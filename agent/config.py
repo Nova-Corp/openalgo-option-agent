@@ -65,7 +65,7 @@ class RiskCfg(BaseModel):
     stop_loss_pct: float = 25.0  # of entry premium
     target_pct: float = 50.0
     breakeven_at_pct: float = 15.0
-    trail_activate_pct: float = 25.0
+    trail_activate_pct: float = 20.0
     trail_step_pct: float = 12.0  # trail stop this % below the highest premium seen
     min_premium: float = 20.0
     max_premium: float = 400.0

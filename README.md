@@ -122,7 +122,7 @@ Evaluated on every closed 5-minute candle of the underlying index:
 Exit rules, checked on every tick of the option price:
 
 - stop-loss 25 % below entry premium, target +50 %
-- stop moves to breakeven at +15 %, trails 12 % below the highest premium once +25 %
+- stop moves to breakeven at +15 %, trails 12 % below the highest premium once +20 %
 - underlying exit: a 5-minute close back through VWAP / EMA21 against the trade
 - time exit at **15:10**, daily loss limit 2 % of capital stops trading for the day
 

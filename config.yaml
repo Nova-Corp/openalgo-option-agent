@@ -43,7 +43,7 @@ risk:
   stop_loss_pct: 25            # on the option premium
   target_pct: 50
   breakeven_at_pct: 15         # move stop to entry once premium is +15%
-  trail_activate_pct: 25       # start trailing once premium is +25%
+  trail_activate_pct: 20       # start trailing once premium is +20% (was 25; a +24% move gave back everything on 2026-10-28)
   trail_step_pct: 12           # trail 12% below the highest premium seen
   min_premium: 20
   max_premium: 400
