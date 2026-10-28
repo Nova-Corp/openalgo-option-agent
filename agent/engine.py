@@ -15,7 +15,7 @@ from datetime import time as _time
 
 SESSION_PREP = _time(9, 5)
 from .config import Config
-from .data import CandleSource, LtpFeed, add_indicators
+from .data import CandleSource, LtpFeed, TickCandleBuilder, add_indicators, merge_candles
 from .execution import Executor
 from .instruments import OptionContract, resolve_contract
 from .journal import Journal, Trade
@@ -56,6 +56,7 @@ class Engine:
         self._df = None
         self.stop_mgr: StopManager | None = None
         self.stopped_reason: str | None = None
+        self.tick_candles: TickCandleBuilder | None = None
 
     # ------------------------------------------------------------ mode
     def check_mode(self) -> bool:
@@ -113,20 +114,22 @@ class Engine:
 
     def wait_for_broker(self) -> bool:
         """Before the open: keep pinging until OpenAlgo has a broker session. Returns False on STOP."""
-        warned = False
+        attempts = 0
         while True:
             if self._control_file("STOP"):
                 return False
             try:
                 self.broker.ping()
-                if warned:
-                    log.info("broker session is back; continuing")
+                if attempts:
+                    log.info("broker session is back after %d retries; continuing", attempts)
                 return True
             except BrokerError as e:
-                if not warned:
+                attempts += 1
+                if attempts == 1:
                     log.error("OpenAlgo not ready (%s). Log in to the broker in the OpenAlgo app. Retrying every 30s.", e)
                     self.notifier.send(f"agent waiting: OpenAlgo not ready ({e}). Log in to AliceBlue in OpenAlgo.")
-                    warned = True
+                else:
+                    log.warning("still waiting for OpenAlgo (retry %d): %s", attempts, str(e)[:120])
                 self.clock.sleep(30)
 
     def run_forever(self) -> None:
@@ -225,6 +228,7 @@ class Engine:
         self.journal = Journal(self.cfg.index_state_dir, now.date())
         self.journal.data["mode"] = self.mode_name
         self.journal.save()
+        self.tick_candles = TickCandleBuilder(self.candles.secs, self.cfg.index_state_dir / f"tickcandles-{now.date().isoformat()}.csv")
         self.stopped_reason = None
         self._last_candle_id = None
         self._pending_candle_id = None
@@ -291,6 +295,12 @@ class Engine:
             if was_paper != self.paper:
                 self.notifier.send(f"analyzer mode changed mid-session: now {self.mode_name}")
 
+        # sample the index every loop so candles can be rebuilt from ticks if the broker's history fails
+        if self.tick_candles is not None:
+            idx_ltp = self.feed.ltp(self.cfg.signal_symbol, self.cfg.signal_exchange)
+            if idx_ltp:
+                self.tick_candles.add(now, idx_ltp)
+
         # open trade: manage stop on every tick
         if trade and self.stop_mgr:
             ltp = self.feed.ltp(trade.symbol, trade.exchange)
@@ -335,18 +345,34 @@ class Engine:
             log.warning("no candles returned for %s", self.cfg.signal_symbol)
             return
         expected_last = at(now.date(), MARKET_OPEN) + timedelta(seconds=(self._pending_candle_id - 1) * self.candles.secs)
-        if df.index[-1] < expected_last:
-            # broker has not published the just-closed candle yet; try again on the next tick
-            lag = (now - expected_last).total_seconds() - self.candles.secs
-            if lag > 90:
-                log.warning("candle %s still missing after %.0fs; skipping it", expected_last.time(), lag)
-                self._last_candle_id = self._pending_candle_id
+        if expected_last < at(now.date(), MARKET_OPEN):
+            self._last_candle_id = self._pending_candle_id  # first slot after the open: no candle has closed yet
             return
+        tdf = self.tick_candles.frame(now) if self.tick_candles is not None else None
+        source = "broker"
+        if df.empty or df.index[-1] < expected_last:
+            # broker has not published the just-closed candle: give it a short grace, then use tick candles
+            lag = (now - expected_last).total_seconds() - self.candles.secs
+            have_ticks = tdf is not None and not tdf.empty and tdf.index[-1] >= expected_last
+            if have_ticks and lag >= self.cfg.execution.candle_grace_sec:
+                df, used = merge_candles(df, tdf)
+                source = f"ticks:{used}"
+                log.warning("broker history missing candle %s; using %d tick-built candle(s)", expected_last.time(), used)
+            elif lag > 90:
+                log.warning("candle %s still missing after %.0fs and no tick candles; skipping it", expected_last.time(), lag)
+                self._last_candle_id = self._pending_candle_id
+                return
+            else:
+                return  # try again on the next tick
+        elif tdf is not None and not tdf.empty:
+            df, used = merge_candles(df, tdf)  # broker has the latest; fill any earlier gaps of today
+            if used:
+                source = f"broker+ticks:{used}"
         self._last_candle_id = self._pending_candle_id
         self._df = add_indicators(df, self.cfg.strategy.ema_fast, self.cfg.strategy.ema_slow)
         last = self._df.iloc[-1]
-        log.info("candle %s close=%.2f vwap=%.2f ema=%.2f/%.2f", self._df.index[-1].strftime("%H:%M"),
-                 last["close"], last["vwap"], last["ema_fast"], last["ema_slow"])
+        log.info("candle %s close=%.2f vwap=%.2f ema=%.2f/%.2f%s", self._df.index[-1].strftime("%H:%M"),
+                 last["close"], last["vwap"], last["ema_fast"], last["ema_slow"], "" if source == "broker" else f" [{source}]")
 
         trade = self.journal.open_trade()
         if trade:

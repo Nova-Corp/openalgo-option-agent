@@ -83,3 +83,61 @@ def test_underlying_exit():
     entry = datetime(2026, 10, 27, 9, 35, tzinfo=IST)
     assert s.underlying_exit(df, "CE", entry) is not None
     assert s.underlying_exit(df, "PE", entry) is None
+
+
+def _day_with_breakout(open_, high, low, close):
+    """Prev-day uptrend, 15-min range ~24995-25035, then a custom 09:30 candle."""
+    prev = [24700 + i * 4 for i in range(75)]
+    df = pd.concat([make_candles(PREV, prev), make_candles(DAY, [25000, 25020, 25010, 25010])])
+    ts = datetime(2026, 10, 27, 9, 30, tzinfo=IST)
+    df.loc[ts, ["open", "high", "low", "close"]] = [open_, high, low, close]
+    return add_indicators(df, 9, 21)
+
+
+NOW = datetime(2026, 10, 27, 9, 35, 5, tzinfo=IST)
+
+
+def test_doji_breakout_is_rejected():
+    s = OrbTrendStrategy(StrategyCfg())
+    # closes above the range high but body is 5 points on a 60-point range -> doji
+    sig, note = s.evaluate(_day_with_breakout(25055, 25090, 25030, 25060), NOW, DayContext())
+    assert sig is None and "doji" in note and "waiting" in note
+
+
+def test_red_candle_breakout_is_rejected_for_ce():
+    s = OrbTrendStrategy(StrategyCfg())
+    # opened at 25100, sold off to 25060: still above the range high, but a red candle
+    sig, note = s.evaluate(_day_with_breakout(25100, 25105, 25055, 25060), NOW, DayContext())
+    assert sig is None and "colour" in note
+
+
+def test_upper_wick_rejection_is_rejected():
+    s = OrbTrendStrategy(StrategyCfg())
+    # green body 25010 -> 25060 but a spike to 25160: close sits only ~33% up the candle
+    sig, note = s.evaluate(_day_with_breakout(25010, 25160, 25008, 25060), NOW, DayContext())
+    assert sig is None and "wick" in note
+
+
+def test_decisive_breakout_candle_is_accepted():
+    s = OrbTrendStrategy(StrategyCfg())
+    sig, note = s.evaluate(_day_with_breakout(25012, 25065, 25008, 25060), NOW, DayContext())
+    assert sig is not None and sig.option_type == "CE", note
+
+
+def test_candle_filters_can_be_disabled():
+    s = OrbTrendStrategy(StrategyCfg(min_body_pct=0, require_direction=False, min_close_position_pct=0))
+    sig, note = s.evaluate(_day_with_breakout(25100, 25105, 25055, 25060), NOW, DayContext())
+    assert sig is not None and sig.option_type == "CE"
+
+
+def test_pe_breakdown_needs_red_decisive_candle():
+    s = OrbTrendStrategy(StrategyCfg())
+    prev = [25300 - i * 4 for i in range(75)]
+    df = pd.concat([make_candles(PREV, prev), make_candles(DAY, [25000, 24980, 24990, 24990])])
+    ts = datetime(2026, 10, 27, 9, 30, tzinfo=IST)
+    df.loc[ts, ["open", "high", "low", "close"]] = [24988, 24992, 24935, 24940]  # red, closes near the low
+    sig, note = s.evaluate(add_indicators(df, 9, 21), NOW, DayContext())
+    assert sig is not None and sig.option_type == "PE", note
+    df.loc[ts, ["open", "high", "low", "close"]] = [24938, 24992, 24935, 24940]  # green hammer-ish: rejected
+    sig, note = s.evaluate(add_indicators(df, 9, 21), NOW, DayContext())
+    assert sig is None and ("colour" in note or "doji" in note)

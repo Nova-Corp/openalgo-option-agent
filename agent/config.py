@@ -46,6 +46,10 @@ class StrategyCfg(BaseModel):
     min_range_pct: float = 0.10  # opening range as % of price
     max_range_pct: float = 0.80
     max_extension_pct: float = 0.30  # do not chase: close must be within this % beyond the range
+    # breakout candle quality: skip indecisive (doji) candles and wait for a decisive one
+    min_body_pct: float = 30.0  # body (|close-open|) must be at least this % of the candle's high-low range
+    require_direction: bool = True  # body must point the breakout way (green for CE, red for PE)
+    min_close_position_pct: float = 66.0  # CE: close in the top third of the candle; PE: bottom third
     max_trades_per_day: int = 2
     max_trades_per_direction: int = 1
     cooldown_minutes: int = 10
@@ -81,6 +85,7 @@ class ExecutionCfg(BaseModel):
     exit_retries: int = 3
     poll_interval_sec: float = 1.0
     candle_delay_sec: int = 5  # wait this long after a candle boundary before fetching it
+    candle_grace_sec: int = 20  # if the broker still lacks the candle after this, build it from live ticks
     ws_stale_sec: float = 10.0
     quote_fallback_interval_sec: float = 2.0
     allow_live: bool = False  # second safety latch; analyzer OFF + allow_live false = refuse to trade

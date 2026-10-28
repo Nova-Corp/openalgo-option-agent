@@ -280,7 +280,7 @@
       new ResizeObserver(() => { chU.timeScale().fitContent(); chP.timeScale().fitContent(); }).observe($('chart_u')); }
     resetChart(chU, seriesU); resetChart(chP, seriesP);
     const cands = d.candles || [];
-    if (!cands.length) { $('chart_empty').style.display = ''; $('chart_empty').textContent = `no candles for ${d.index} on ${d.date}`; return; }
+    if (!cands.length) { $('chart_empty').style.display = ''; $('chart_empty').textContent = `no candles for ${d.index} on ${d.date}` + (d.note ? ` (${d.note})` : ''); $('ch_info').textContent = ''; return; }
     $('chart_empty').style.display = 'none';
     const cs = chU.addCandlestickSeries({ upColor: '#26a69a', downColor: '#ef5350', wickUpColor: '#26a69a', wickDownColor: '#ef5350', borderVisible: false }); seriesU.push(cs);
     cs.setData(cands.map(c => ({ time: c.time, open: c.open, high: c.high, low: c.low, close: c.close })));
@@ -307,9 +307,10 @@
     chU.timeScale().fitContent();
     // premium chart: one trade at a time (the selected one, else the latest of the day)
     const t = sel === '' ? d.trades[d.trades.length - 1] : d.trades[Number(sel)];
-    if (!t) { $('ch_info').textContent = `${d.trades.length ? '' : 'no trades this day · '}${cands.length} candles`; return; }
+    const srcNote = d.candle_source === 'ticks' ? 'candles built from live ticks (broker history missing) · ' : d.candle_source === 'broker+ticks' ? 'some candles built from live ticks · ' : '';
+    if (!t) { $('ch_info').textContent = `${srcNote}${d.trades.length ? '' : 'no trades this day · '}${cands.length} candles`; return; }
     const prem = t.premium || [];
-    $('ch_info').textContent = `${t.symbol} · entry ${fmt(t.entry_price)} · ${t.status === 'CLOSED' ? 'exit ' + fmt(t.exit_price) + ' · P&L ' + fmt(t.pnl) : t.status} · ${t.exit_reason || ''}${prem.length ? '' : ' · (no premium data recorded for this trade)'}`;
+    $('ch_info').textContent = `${srcNote}${t.symbol} · entry ${fmt(t.entry_price)} · ${t.status === 'CLOSED' ? 'exit ' + fmt(t.exit_price) + ' · P&L ' + fmt(t.pnl) : t.status} · ${t.exit_reason || ''}${prem.length ? '' : ' · (no premium data recorded for this trade)'}`;
     if (!prem.length) return;
     const ps = chP.addLineSeries({ color: '#26a69a', lineWidth: 2, priceLineVisible: false }); seriesP.push(ps); ps.setData(prem);
     const t0 = prem[0].time, t1 = prem[prem.length - 1].time;

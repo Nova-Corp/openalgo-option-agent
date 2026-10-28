@@ -246,3 +246,29 @@ def test_chart_data_is_recorded(tmp_path):
     assert stops[0] == 75.0 and 100.0 in stops and round(130 * 0.88, 2) in stops
     ticks = (tmp_path / "state" / "NIFTY" / f"ticks-{t.id}.csv").read_text().splitlines()
     assert ticks[0] == "time,ltp" and any(l.endswith(",152.0") for l in ticks) and len(ticks) >= 4
+
+
+def test_tick_candles_cover_broker_outage(tmp_path):
+    """Broker history stops after the 09:25 candle. Index ticks keep arriving; the agent builds the
+    09:30 candle from them, sees the breakout and trades."""
+    b = FakeBroker(candles())
+    b.history_cutoff = datetime(2026, 10, 27, 9, 30, tzinfo=IST)  # 09:30 candle (and later) never served
+    b.set_ltp("NIFTY", 25010)
+    opt = "NIFTY27OCT2625050CE"
+    b.set_ltp(opt, 100.0)
+    start = datetime(2026, 10, 27, 9, 30, 0, tzinfo=IST)
+    events = []
+    # index ticks every 10s through the 09:30 candle: climbs to 25060 (breakout above the 25035 range high)
+    for i in range(31):
+        px = 25010 + i * 50 / 30
+        events.append((start + timedelta(seconds=i * 10), (lambda p=px: b.push("NIFTY", "NSE_INDEX", p))))
+    events.append((start + timedelta(minutes=5, seconds=40), lambda: b.push(opt, "NFO", 152.0)))
+    clock = ScriptedClock(start, events)
+    cfg = make_cfg(tmp_path)
+    cfg.execution.candle_grace_sec = 10
+    eng = Engine(cfg, b, clock)
+    eng.run(max_iterations=420)
+    j = Journal(tmp_path / "state" / "NIFTY", DAY)
+    assert len(j.trades) == 1 and j.trades[0].status == "CLOSED" and j.trades[0].option_type == "CE"
+    tc = (tmp_path / "state" / "NIFTY" / "tickcandles-2026-10-27.csv").read_text().splitlines()
+    assert tc[0].startswith("time,open,high,low,close") and any(l.startswith("2026-10-27T09:30:00+05:30,") for l in tc)

@@ -26,6 +26,9 @@ strategy:
   min_range_pct: 0.10          # skip if opening range < 0.10% of price (too quiet)
   max_range_pct: 0.80          # skip if opening range > 0.80% of price (too wild)
   max_extension_pct: 0.30      # do not chase a close more than 0.30% beyond the range
+  min_body_pct: 30             # breakout candle must not be a doji: body >= 30% of its high-low range
+  require_direction: true      # green candle for a CE breakout, red candle for a PE breakdown
+  min_close_position_pct: 66   # CE: close in the top third of the candle; PE: in the bottom third
   max_trades_per_day: 2
   max_trades_per_direction: 1
   cooldown_minutes: 10
@@ -33,8 +36,8 @@ strategy:
 
 risk:
   capital: 100000              # the capital you are allocating to this agent (₹)
-  risk_per_trade_pct: 1.0      # ₹1,000 per trade at 1 lakh -> sizes lots from premium * stop%
-  max_daily_loss_pct: 2.0      # stop trading for the day after -₹2,000
+  risk_per_trade_pct: 2.0      # ₹2,000 per trade at 1 lakh -> a ₹200 NIFTY premium is tradeable with 1 lot
+  max_daily_loss_pct: 4.0      # stop trading for the day after -₹4,000
   max_lots: 2
   min_lots: 1
   stop_loss_pct: 25            # on the option premium
@@ -52,6 +55,7 @@ execution:
   exit_retries: 3
   poll_interval_sec: 1.0
   candle_delay_sec: 5
+  candle_grace_sec: 20         # broker candle still missing after 20s -> use candles built from live ticks
   ws_stale_sec: 10
   quote_fallback_interval_sec: 2
   allow_live: false            # SAFETY LATCH. Live orders only when OpenAlgo analyzer is OFF *and* this is true.
@@ -67,6 +71,8 @@ active_underlyings: [NIFTY]
 underlyings:
   NIFTY: {}
   BANKNIFTY:
+    # monthly-only expiries: ATM premiums run ~₹800-1,100 four weeks out, so with ₹1 lakh capital BANKNIFTY
+    # only fits the risk budget in its expiry week. Even OTM10 (1,000 pts out) calls were ₹610 on 28 Oct.
     risk: {min_premium: 50, max_premium: 1200}
   SENSEX:
     risk: {min_premium: 50, max_premium: 1200}

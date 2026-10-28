@@ -83,7 +83,11 @@ class FakeBroker:
         self.calls.append("history")
         df = self.candles
         d = df.index.date
-        return df[(d >= pd.Timestamp(start).date()) & (d <= pd.Timestamp(end).date())]
+        out = df[(d >= pd.Timestamp(start).date()) & (d <= pd.Timestamp(end).date())]
+        cutoff = getattr(self, "history_cutoff", None)  # simulate the broker not serving candles after this time
+        if cutoff is not None:
+            out = out[out.index < cutoff]
+        return out
 
     def expiries(self, symbol, exchange):
         return list(self.expiry_list)

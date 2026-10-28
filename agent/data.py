@@ -142,3 +142,109 @@ class LtpFeed:
             self.broker.disconnect_feed()
         except Exception:
             pass
+
+
+class TickCandleBuilder:
+    """Builds interval candles from live LTP ticks of one symbol, as a fallback when the broker's
+    history API is missing candles. Completed candles are appended to a CSV so a restart (and the
+    dashboard) can read them. Volume is unknown for ticks and recorded as 0."""
+
+    def __init__(self, interval_secs: int, path=None):
+        from pathlib import Path
+
+        from .clock import MARKET_OPEN, at
+
+        self.secs = int(interval_secs)
+        self.path = Path(path) if path else None
+        self._open = MARKET_OPEN
+        self._at = at
+        self.buckets: dict[datetime, dict] = {}
+        self._saved: set[datetime] = set()
+        self.partial: set[datetime] = set()  # buckets whose first tick came late (agent started mid-candle)
+        if self.path and self.path.exists():
+            self._load()
+
+    def _load(self) -> None:
+        import csv
+
+        try:
+            with self.path.open() as f:
+                for r in csv.DictReader(f):
+                    ts = datetime.fromisoformat(r["time"]).astimezone(IST)
+                    self.buckets[ts] = {"open": float(r["open"]), "high": float(r["high"]), "low": float(r["low"]),
+                                        "close": float(r["close"]), "ticks": int(r.get("ticks") or 0)}
+                    self._saved.add(ts)
+                    if r.get("partial") == "1":
+                        self.partial.add(ts)
+        except (OSError, ValueError, KeyError) as e:
+            log.warning("could not load tick candles %s: %s", self.path, e)
+
+    def bucket_start(self, ts: datetime) -> datetime | None:
+        open_t = self._at(ts.date(), self._open)
+        since = (ts - open_t).total_seconds()
+        if since < 0:
+            return None
+        return open_t + timedelta(seconds=int(since // self.secs) * self.secs)
+
+    def add(self, ts: datetime, price: float) -> None:
+        b = self.bucket_start(ts)
+        if b is None or price <= 0:
+            return
+        c = self.buckets.get(b)
+        if c is None:
+            self.buckets[b] = {"open": price, "high": price, "low": price, "close": price, "ticks": 1}
+            if (ts - b).total_seconds() > 15:
+                self.partial.add(b)
+        else:
+            c["high"] = max(c["high"], price)
+            c["low"] = min(c["low"], price)
+            c["close"] = price
+            c["ticks"] += 1
+        self._flush(b)
+
+    def _flush(self, current: datetime) -> None:
+        """Persist every completed bucket (start before the current one) not yet saved."""
+        if not self.path:
+            return
+        pending = sorted(k for k in self.buckets if k < current and k not in self._saved)
+        if not pending:
+            return
+        try:
+            new = not self.path.exists()
+            with self.path.open("a") as f:
+                if new:
+                    f.write("time,open,high,low,close,ticks,partial\n")
+                for k in pending:
+                    c = self.buckets[k]
+                    f.write(f"{k.isoformat(timespec='seconds')},{c['open']},{c['high']},{c['low']},{c['close']},{c['ticks']},{int(k in self.partial)}\n")
+                    self._saved.add(k)
+        except OSError as e:
+            log.debug("tick candle save failed: %s", e)
+
+    def frame(self, now: datetime) -> pd.DataFrame:
+        """Completed candles (start + interval <= now) as a DataFrame indexed by IST start time."""
+        rows, idx = [], []
+        for k in sorted(self.buckets):
+            if k + timedelta(seconds=self.secs) <= now:
+                c = self.buckets[k]
+                rows.append({"open": c["open"], "high": c["high"], "low": c["low"], "close": c["close"], "volume": 0, "oi": 0})
+                idx.append(k)
+        if not rows:
+            return pd.DataFrame(columns=["open", "high", "low", "close", "volume", "oi"])
+        return pd.DataFrame(rows, index=pd.DatetimeIndex(idx, name="timestamp").tz_convert(IST))
+
+
+def merge_candles(broker_df: pd.DataFrame, tick_df: pd.DataFrame) -> tuple[pd.DataFrame, int]:
+    """Broker candles win; tick-built candles fill the timestamps the broker is missing.
+    Returns (merged, number of tick candles used)."""
+    if tick_df is None or tick_df.empty:
+        return broker_df, 0
+    if broker_df is None or broker_df.empty:
+        return tick_df.copy(), len(tick_df)
+    fill = tick_df[~tick_df.index.isin(broker_df.index)]
+    if fill.empty:
+        return broker_df, 0
+    merged = pd.concat([broker_df, fill[[c for c in broker_df.columns if c in fill.columns]]]).sort_index()
+    if not isinstance(merged.index, pd.DatetimeIndex):  # mixed tz objects: normalise
+        merged.index = pd.DatetimeIndex(pd.to_datetime(merged.index, utc=True)).tz_convert(IST)
+    return merged, len(fill)

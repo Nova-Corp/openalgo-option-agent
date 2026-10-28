@@ -69,6 +69,26 @@ class OrbTrendStrategy:
             return "cooldown after last exit"
         return None
 
+    # ---------------------------------------------------- candle quality
+    def candle_quality(self, candle, option_type: str) -> str | None:
+        """Returns a reason if the breakout candle is indecisive (doji, wrong colour, rejection wick)."""
+        c = self.cfg
+        o, h, l, cl = float(candle["open"]), float(candle["high"]), float(candle["low"]), float(candle["close"])
+        rng = h - l
+        if rng <= 0:
+            return "flat candle"
+        body_pct = abs(cl - o) / rng * 100
+        if body_pct < c.min_body_pct:
+            return f"doji-like candle (body {body_pct:.0f}% of range)"
+        if c.require_direction and ((option_type == "CE" and cl <= o) or (option_type == "PE" and cl >= o)):
+            return "candle colour against the breakout"
+        pos = (cl - l) / rng * 100  # 100 = closed at the high, 0 = closed at the low
+        if option_type == "CE" and pos < c.min_close_position_pct:
+            return f"close only {pos:.0f}% up the candle (upper wick rejection)"
+        if option_type == "PE" and pos > 100 - c.min_close_position_pct:
+            return f"close only {100 - pos:.0f}% down the candle (lower wick rejection)"
+        return None
+
     # ------------------------------------------------------------ entry
     def evaluate(self, df: pd.DataFrame, now: datetime, ctx: DayContext) -> tuple[Signal | None, str]:
         """Returns (signal, note). note explains why there is no signal."""
@@ -107,6 +127,9 @@ class OrbTrendStrategy:
                 return None, "CE breakout but close below VWAP"
             if c.use_ema_filter and ef <= es:
                 return None, "CE breakout but EMA fast below slow"
+            why = self.candle_quality(last, "CE")
+            if why:
+                return None, f"CE breakout but {why}; waiting for a decisive candle"
             option_type = "CE"
         elif close < orb_low:
             ext = (orb_low - close) / orb_low * 100
@@ -116,6 +139,9 @@ class OrbTrendStrategy:
                 return None, "PE breakdown but close above VWAP"
             if c.use_ema_filter and ef >= es:
                 return None, "PE breakdown but EMA fast above slow"
+            why = self.candle_quality(last, "PE")
+            if why:
+                return None, f"PE breakdown but {why}; waiting for a decisive candle"
             option_type = "PE"
         else:
             return None, f"inside opening range [{orb_low:.1f}, {orb_high:.1f}] close={close:.1f}"

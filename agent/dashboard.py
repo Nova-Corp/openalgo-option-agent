@@ -8,6 +8,8 @@ from __future__ import annotations
 import copy
 import csv
 import json
+
+import pandas as pd
 import logging
 import threading
 import time
@@ -18,7 +20,7 @@ from pathlib import Path
 from .broker import BrokerError
 from .clock import IST
 from .config import Config
-from .data import add_indicators
+from .data import add_indicators, merge_candles
 from .journal import Trade
 
 STATIC_DIR = Path(__file__).with_name("static")
@@ -173,6 +175,27 @@ class ChartData:
         self.state_dir = Path(cfg.project_dir) / cfg.state_dir
         self._lock = threading.Lock()
         self._candles: dict[tuple[str, str], tuple[float, list]] = {}
+        self._source: dict[tuple[str, str], str] = {}
+
+    def _tick_candles(self, index: str, day: date) -> "pd.DataFrame":
+        """Candles the agent built from live ticks that day (state/<INDEX>/tickcandles-<date>.csv)."""
+        path = self.state_dir / index / f"tickcandles-{day.isoformat()}.csv"
+        cols = ["open", "high", "low", "close", "volume", "oi"]
+        if not path.exists():
+            return pd.DataFrame(columns=cols)
+        rows, idx = [], []
+        try:
+            with path.open() as f:
+                for r in csv.DictReader(f):
+                    idx.append(datetime.fromisoformat(r["time"]).astimezone(IST))
+                    rows.append({"open": float(r["open"]), "high": float(r["high"]), "low": float(r["low"]),
+                                 "close": float(r["close"]), "volume": 0, "oi": 0})
+        except (OSError, ValueError, KeyError) as e:
+            log.debug("tick candles unreadable %s: %s", path, e)
+            return pd.DataFrame(columns=cols)
+        if not rows:
+            return pd.DataFrame(columns=cols)
+        return pd.DataFrame(rows, index=pd.DatetimeIndex(idx, name="timestamp").tz_convert(IST))
 
     def _cfg_for(self, index: str) -> Config:
         c = copy.deepcopy(self.cfg)
@@ -189,11 +212,25 @@ class ChartData:
                 return hit[1]
         c = self._cfg_for(index)
         start = (day - timedelta(days=c.strategy.history_days + 4)).isoformat()
-        df = self.broker.history(c.signal_symbol, c.signal_exchange, c.strategy.candle_interval, start, day.isoformat())
-        if df.index.tz is None:
-            df.index = df.index.tz_localize(IST)
-        else:
-            df.index = df.index.tz_convert(IST)
+        tdf = self._tick_candles(index, day)
+        try:
+            df = self.broker.history(c.signal_symbol, c.signal_exchange, c.strategy.candle_interval, start, day.isoformat())
+            if df.index.tz is None:
+                df.index = df.index.tz_localize(IST)
+            else:
+                df.index = df.index.tz_convert(IST)
+        except Exception as e:
+            if hit and hit[1]:
+                log.warning("broker history failed for %s %s (%s); keeping the previous %d candles", index, day, e, len(hit[1]))
+                with self._lock:
+                    self._candles[key] = (time.monotonic() - ttl + 5, hit[1])
+                return hit[1]
+            if tdf.empty:
+                raise
+            log.warning("broker history failed for %s %s (%s); using %d tick-built candles", index, day, e, len(tdf))
+            df = pd.DataFrame(columns=["open", "high", "low", "close", "volume", "oi"])
+        df, used = merge_candles(df, tdf)
+        self._source[key] = "broker" if not used else ("ticks" if used == len(df[df.index.date == day]) else "broker+ticks")
         df = add_indicators(df, c.strategy.ema_fast, c.strategy.ema_slow)
         rows = []
         for ts, r in df[df.index.date == day].iterrows():
@@ -201,6 +238,14 @@ class ChartData:
                          "close": float(r["close"]), "ema_fast": round(float(r["ema_fast"]), 2),
                          "ema_slow": round(float(r["ema_slow"]), 2), "vwap": round(float(r["vwap"]), 2)})
         with self._lock:
+            if not rows and hit and hit[1]:
+                # the broker hiccupped and returned nothing for a day we already have: keep the last good
+                # candles and retry soon instead of showing a blank chart for the whole cache window
+                log.warning("broker returned no candles for %s %s; keeping the previous %d", index, day, len(hit[1]))
+                self._candles[key] = (time.monotonic() - ttl + 5, hit[1])
+                return hit[1]
+            if not rows:
+                return rows  # nothing cached: do not cache the empty answer either
             self._candles[key] = (time.monotonic(), rows)
         return rows
 
@@ -267,8 +312,14 @@ class ChartData:
                     trades.append(t)
             except (OSError, json.JSONDecodeError):
                 pass
+        source = self._source.get((index, day.isoformat()), "broker" if candles else "none")
+        note = ""
+        if not candles:
+            note = ("market not open yet" if day == datetime.now(IST).date() and datetime.now(IST).hour < 9
+                    else "the broker returned no candles for this day and the agent built none from ticks")
         return {"index": index, "date": day.isoformat(), "interval": c.strategy.candle_interval, "candles": candles,
-                "orb": orb, "trades": trades, "ema": [c.strategy.ema_fast, c.strategy.ema_slow]}
+                "candle_source": source, "note": note, "orb": orb, "trades": trades,
+                "ema": [c.strategy.ema_fast, c.strategy.ema_slow]}
 
 
 class Handler(BaseHTTPRequestHandler):

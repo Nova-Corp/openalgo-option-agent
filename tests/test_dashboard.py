@@ -102,3 +102,57 @@ def test_chart_api(tmp_path):
     assert "ema_fast" in p["candles"][-1] and "vwap" in p["candles"][-1]
     # cached second call
     assert cd.build("NIFTY", day)["candles"] == p["candles"]
+
+
+def test_chart_keeps_last_good_candles_on_broker_hiccup(tmp_path):
+    from agent.broker import BrokerError
+    from agent.dashboard import ChartData
+
+    cfg = Config()
+    cfg.project_dir = str(tmp_path)
+    day = date(2026, 10, 27)
+    good = make_candles(day, [25000, 25010, 25020])
+    b = FakeBroker(good)
+    cd = ChartData(cfg, b)
+    assert len(cd.build("NIFTY", day)["candles"]) == 3
+    cd._candles[("NIFTY", day.isoformat())] = (0.0, cd._candles[("NIFTY", day.isoformat())][1])  # expire the cache
+    b.candles = make_candles(date(2026, 10, 20), [1, 2])  # broker now answers with nothing for that day
+    assert len(cd.build("NIFTY", day)["candles"]) == 3  # previous candles kept
+    cd._candles[("NIFTY", day.isoformat())] = (0.0, cd._candles[("NIFTY", day.isoformat())][1])
+
+    def boom(*a, **k):
+        raise BrokerError("Could not reach the broker")
+
+    b.history = boom
+    assert len(cd.build("NIFTY", day)["candles"]) == 3  # broker error: still the previous candles, no 500
+    # with nothing cached at all, an empty answer is returned but not cached
+    cd2 = ChartData(cfg, FakeBroker(make_candles(date(2026, 10, 20), [1, 2])))
+    assert cd2.build("NIFTY", day)["candles"] == [] and ("NIFTY", day.isoformat()) not in cd2._candles
+
+
+def test_chart_fills_from_tick_candles(tmp_path):
+    from agent.broker import BrokerError
+    from agent.dashboard import ChartData
+
+    cfg = Config()
+    cfg.project_dir = str(tmp_path)
+    day = date(2026, 10, 28)
+    d = tmp_path / "state" / "SENSEX"
+    d.mkdir(parents=True)
+    (d / f"tickcandles-{day}.csv").write_text(
+        "time,open,high,low,close,ticks,partial\n"
+        "2026-10-28T09:15:00+05:30,100,110,95,105,40,0\n"
+        "2026-10-28T09:20:00+05:30,105,112,101,110,38,0\n"
+        "2026-10-28T09:25:00+05:30,110,115,108,112,41,0\n")
+    # broker serves only the first candle of the day -> ticks fill the rest
+    b = FakeBroker(make_candles(day, [105]))
+    cd = ChartData(cfg, b)
+    p = cd.build("SENSEX", day)
+    assert len(p["candles"]) == 3 and p["candle_source"] == "broker+ticks" and p["orb"]["high"] == 115
+    # broker errors entirely -> all from ticks
+    def boom(*a, **k):
+        raise BrokerError("Could not reach the broker")
+    b.history = boom
+    cd2 = ChartData(cfg, b)
+    p2 = cd2.build("SENSEX", day)
+    assert len(p2["candles"]) == 3 and p2["candle_source"] == "ticks"

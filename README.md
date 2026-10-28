@@ -112,6 +112,10 @@ Evaluated on every closed 5-minute candle of the underlying index:
 3. Filters: range width between 0.10 % and 0.80 % of price; the breakout close must not be more than
    0.30 % beyond the range (no chasing); entries only 09:30–14:30; max 2 trades/day, 1 per direction;
    10-minute cooldown after an exit.
+   **Candle quality**: the breakout candle must be decisive, not a doji: body at least 30 % of its
+   high-low range, coloured in the breakout direction (green for CE, red for PE), and closing in the
+   top third (CE) / bottom third (PE) of the candle. An indecisive breakout candle is skipped and the
+   next candle is judged by the same rules, so a reversal off a doji is never bought.
 4. Buys the **ATM** option of the **nearest expiry** (configurable: OTM1/ITM1, `next` expiry,
    `min_days_to_expiry: 1` to skip expiry day).
 
@@ -128,6 +132,16 @@ the budget is skipped.
 
 All numbers live in `config.yaml`. The index has no volume, so VWAP falls back to a
 time-weighted average of typical price; set `signal_symbol` to the current-month future for a true VWAP.
+
+## 4b. Candles when the broker's history fails
+
+AliceBlue's history API sometimes stops serving a day's intraday candles for a while (seen with
+SENSEX on 28 Oct 2026). Each agent therefore samples its index's live price every second and builds its
+own 5-minute candles from those ticks (`state/<INDEX>/tickcandles-<date>.csv`). When the broker has
+not published a candle `candle_grace_sec` (20 s) after it closed, the agent uses the tick-built candle
+instead, and fills any earlier gaps the same way; broker candles always win when both exist. The chart
+does the same merge, and says so under the chart. Tick candles carry no volume and, if the agent started
+mid-candle, the first one is marked partial.
 
 ## 5. Reliability features
 
