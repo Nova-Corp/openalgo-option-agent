@@ -117,11 +117,46 @@ class OpenAlgoBroker:
             raise BrokerError(f"{getattr(fn, '__name__', 'call')}: {msg}", payload=res, transient=transient)
 
     # --------------------------------------------------------------- account
+    def reset_connection(self) -> None:
+        """Drop the SDK's pooled HTTP connection so the next call opens a fresh TCP socket.
+
+        On macOS the AirPlay Receiver also listens on port 5000 (on every address). If an agent
+        starts a few seconds before OpenAlgo has bound 127.0.0.1:5000, its first connection lands
+        on AirPlay, which answers HTTP 403 with an empty body, and the SDK's keep-alive pool would
+        reuse that same socket forever. Closing the client is the only way out.
+        """
+        import httpx
+
+        old = getattr(self.api, "client", None)
+        try:
+            if old is not None:
+                old.close()
+        except Exception:  # pragma: no cover - best effort
+            pass
+        self.api.client = httpx.Client(
+            timeout=self.cfg.timeout_sec,
+            limits=httpx.Limits(max_keepalive_connections=20, max_connections=50, keepalive_expiry=120.0),
+        )
+
+    @staticmethod
+    def _looks_like_wrong_server(res: Any) -> bool:
+        """HTTP 403 with an empty body is not OpenAlgo; OpenAlgo always answers JSON."""
+        if not isinstance(res, dict):
+            return False
+        return res.get("code") == 403 and not str(res.get("raw_response") or "").strip()
+
     def ping(self) -> dict:
         # The SDK has no ping() method; use the REST endpoint directly.
         res = self.api._post("ping", {"apikey": self.cfg.api_key})
         if not isinstance(res, dict) or res.get("status") != "success":
-            raise BrokerError(f"ping: {(res or {}).get('message') if isinstance(res, dict) else res}", payload=res)
+            # Whatever went wrong, do not keep the socket: a stale keep-alive connection to the
+            # wrong listener (or to a restarted OpenAlgo) would make every retry fail the same way.
+            self.reset_connection()
+            msg = (res or {}).get("message") if isinstance(res, dict) else res
+            if self._looks_like_wrong_server(res):
+                msg = (f"{msg} - port 5000 answered by another program (macOS AirPlay Receiver?), "
+                       f"OpenAlgo is not listening yet; retrying on a fresh connection")
+            raise BrokerError(f"ping: {msg}", payload=res, transient=True)
         return res.get("data", {})
 
     def analyzer_mode(self) -> bool:

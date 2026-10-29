@@ -145,6 +145,12 @@ mid-candle, the first one is marked partial.
 
 ## 5. Reliability features
 
+**Port 5000 is shared with macOS AirPlay Receiver.** If an agent starts a few seconds before OpenAlgo
+has bound its port, its first connection lands on AirPlay (HTTP 403, empty body). The agent now drops
+that connection on every failed ping and retries on a fresh socket, and `morning.sh` waits for OpenAlgo's
+own home page before starting agents. To remove the clash entirely, turn off
+System Settings > General > AirDrop & Handoff > AirPlay Receiver.
+
 - **Mode latch**: refuses to run live unless analyzer is OFF *and* `allow_live: true`; re-checks mode every minute and squares off if it flips to live without permission.
 - **Fill confirmation**: every order is polled via `orderstatus`; on timeout the position is checked, unconfirmed orders are cancelled before anything is re-sent, so no duplicate exits.
 - **Exit retries** then `closeposition` as a last resort, with a loud log/alert if even that fails.

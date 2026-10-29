@@ -20,8 +20,16 @@ echo "== Indices: ${WANT[*]}"
 
 echo "== 1. OpenAlgo app"
 if pgrep -qf "OpenAlgo Desktop.app"; then echo "   running"; else echo "   starting it"; open -ga "OpenAlgo Desktop"; fi
-for i in {1..40}; do curl -s -m 2 -o /dev/null http://127.0.0.1:5000/ && break; sleep 1; done
-curl -s -m 2 -o /dev/null http://127.0.0.1:5000/ && echo "   API up on :5000" || echo "   WARNING: OpenAlgo API not answering on :5000"
+# macOS AirPlay Receiver also listens on :5000 and answers 403 to everything; only OpenAlgo
+# answers its home page with 200/302. Wait for OpenAlgo itself before starting any agent.
+oa_code() { curl -s -m 2 -o /dev/null -w '%{http_code}' http://127.0.0.1:5000/ 2>/dev/null || echo 000; }
+for i in {1..60}; do c=$(oa_code); case "$c" in 200|302) break ;; esac; sleep 1; done
+case "$(oa_code)" in
+  200|302) echo "   API up on :5000" ;;
+  403) echo "   WARNING: port 5000 is answered by another program (AirPlay Receiver?), OpenAlgo is not up yet."
+       echo "            Agents will keep retrying on their own; or turn off System Settings > General > AirDrop & Handoff > AirPlay Receiver." ;;
+  *)   echo "   WARNING: OpenAlgo API not answering on :5000 (agents will keep retrying)" ;;
+esac
 
 echo "== 2. Agents"
 [ -f STOP ] && echo "   STOP file present: agents will not trade. Delete it (rm STOP) and run this again."
