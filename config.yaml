@@ -17,7 +17,7 @@ strategy:
   candle_interval: 5m
   history_days: 5              # prior days pulled so EMAs are warmed up at the open
   opening_range_minutes: 15    # 09:15–09:30
-  entry_start: "09:30"
+  entry_start: "09:45"         # first candle out of the range (09:30-09:45) is skipped: it was a loser 5 of 5 times this week
   entry_end: "14:30"
   ema_fast: 9
   ema_slow: 21

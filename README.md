@@ -110,7 +110,7 @@ Evaluated on every closed 5-minute candle of the underlying index:
 2. **CE entry**: a candle closes above the range high, close > VWAP, EMA9 > EMA21.
    **PE entry**: mirror image below the range low.
 3. Filters: range width between 0.10 % and 0.80 % of price; the breakout close must not be more than
-   0.30 % beyond the range (no chasing); entries only 09:30–14:30; max 2 trades/day, 1 per direction;
+   0.50 % beyond the range (no chasing); entries only 09:45–14:30 (the first candle out of the range is never traded); max 2 trades/day, 1 per direction;
    10-minute cooldown after an exit.
    **Candle quality**: the breakout candle must be decisive, not a doji: body at least 30 % of its
    high-low range, coloured in the breakout direction (green for CE, red for PE), and closing in the
