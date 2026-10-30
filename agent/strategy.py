@@ -130,6 +130,9 @@ class OrbTrendStrategy:
             why = self.candle_quality(last, "CE")
             if why:
                 return None, f"CE breakout but {why}; waiting for a decisive candle"
+            if c.require_full_body_outside and float(last["open"]) <= orb_high:
+                return None, (f"CE breakout but candle opened inside the range (open {float(last['open']):.1f} <= "
+                              f"high {orb_high:.1f}); waiting for a full-body candle above it")
             option_type = "CE"
         elif close < orb_low:
             ext = (orb_low - close) / orb_low * 100
@@ -142,6 +145,9 @@ class OrbTrendStrategy:
             why = self.candle_quality(last, "PE")
             if why:
                 return None, f"PE breakdown but {why}; waiting for a decisive candle"
+            if c.require_full_body_outside and float(last["open"]) >= orb_low:
+                return None, (f"PE breakdown but candle opened inside the range (open {float(last['open']):.1f} >= "
+                              f"low {orb_low:.1f}); waiting for a full-body candle below it")
             option_type = "PE"
         else:
             return None, f"inside opening range [{orb_low:.1f}, {orb_high:.1f}] close={close:.1f}"

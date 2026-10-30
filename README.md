@@ -116,6 +116,7 @@ Evaluated on every closed 5-minute candle of the underlying index:
    high-low range, coloured in the breakout direction (green for CE, red for PE), and closing in the
    top third (CE) / bottom third (PE) of the candle. An indecisive breakout candle is skipped and the
    next candle is judged by the same rules, so a reversal off a doji is never bought.
+   **Full-body breakout** (`require_full_body_outside`, on): the breakout candle must open *and* close above the range high (for a put: open and close below the low). A candle that straddles the line is skipped and the next candle is judged afresh. This waits one candle longer but avoids the single-candle traps; `max_extension_pct` is 0.50 to allow it. Ten-day replay (proxy premiums, 2026-10-16 to 10-30): NIFTY −₹1,841 → +₹5,564, BANKNIFTY +₹1,189 → +₹2,341, SENSEX +₹1,215 → +₹7,664.
 4. Buys the **ATM** option of the **nearest expiry** (configurable: OTM1/ITM1, `next` expiry,
    `min_days_to_expiry: 1` to skip expiry day).
 

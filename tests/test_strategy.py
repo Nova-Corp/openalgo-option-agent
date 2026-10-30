@@ -141,3 +141,23 @@ def test_pe_breakdown_needs_red_decisive_candle():
     df.loc[ts, ["open", "high", "low", "close"]] = [24938, 24992, 24935, 24940]  # green hammer-ish: rejected
     sig, note = s.evaluate(add_indicators(df, 9, 21), NOW, DayContext())
     assert sig is None and ("colour" in note or "doji" in note)
+
+
+def test_full_body_rule_rejects_candle_that_opened_inside_range():
+    s = OrbTrendStrategy(StrategyCfg(require_full_body_outside=True))
+    # decisive green candle 25012 -> 25060 but it opened below the ~25035 range high
+    sig, note = s.evaluate(_day_with_breakout(25012, 25065, 25008, 25060), NOW, DayContext())
+    assert sig is None and "opened inside the range" in note and "full-body" in note
+
+
+def test_full_body_rule_accepts_candle_fully_above_range():
+    s = OrbTrendStrategy(StrategyCfg(require_full_body_outside=True, max_extension_pct=0.5))
+    # opens above the range high and closes higher: whole body outside
+    sig, note = s.evaluate(_day_with_breakout(25040, 25075, 25038, 25070), NOW, DayContext())
+    assert sig is not None and sig.option_type == "CE", note
+
+
+def test_full_body_rule_off_keeps_old_behaviour():
+    s = OrbTrendStrategy(StrategyCfg(require_full_body_outside=False))
+    sig, note = s.evaluate(_day_with_breakout(25012, 25065, 25008, 25060), NOW, DayContext())
+    assert sig is not None and sig.option_type == "CE", note

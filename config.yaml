@@ -25,10 +25,11 @@ strategy:
   use_ema_filter: true
   min_range_pct: 0.10          # skip if opening range < 0.10% of price (too quiet)
   max_range_pct: 0.80          # skip if opening range > 0.80% of price (too wild)
-  max_extension_pct: 0.30      # do not chase a close more than 0.30% beyond the range
+  max_extension_pct: 0.50      # do not chase a close more than 0.50% beyond the range (0.30 before the full-body rule)
   min_body_pct: 30             # breakout candle must not be a doji: body >= 30% of its high-low range
   require_direction: true      # green candle for a CE breakout, red candle for a PE breakdown
   min_close_position_pct: 66   # CE: close in the top third of the candle; PE: in the bottom third
+  require_full_body_outside: true  # CE: candle must OPEN and close above the range high; PE: open and close below the low
   max_trades_per_day: 2
   max_trades_per_direction: 1
   cooldown_minutes: 10

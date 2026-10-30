@@ -50,6 +50,7 @@ class StrategyCfg(BaseModel):
     min_body_pct: float = 30.0  # body (|close-open|) must be at least this % of the candle's high-low range
     require_direction: bool = True  # body must point the breakout way (green for CE, red for PE)
     min_close_position_pct: float = 66.0  # CE: close in the top third of the candle; PE: bottom third
+    require_full_body_outside: bool = False  # CE: open AND close above the range high; PE: both below the low
     max_trades_per_day: int = 2
     max_trades_per_direction: int = 1
     cooldown_minutes: int = 10
