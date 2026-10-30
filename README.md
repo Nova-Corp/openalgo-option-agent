@@ -50,7 +50,7 @@ Name them to choose for the day:
 ```
 
 Each index is an independent agent with its own journal in `state/<INDEX>/`, its own lock, its own
-lots and its own daily loss limit, so three indices means up to three times the risk of one. Agents
+lots; the daily loss limit is shared, so once the indices together have lost 4 % no agent enters again that day. Agents
 for indices you leave out are stopped, unless they have an open trade. Per-index settings live under
 `underlyings:` in `config.yaml` (BANKNIFTY and SENSEX get a wider premium window by default). Any
 command accepts `-u INDEX`, e.g. `./run.sh check -u SENSEX`, `./run.sh squareoff -u BANKNIFTY`.
@@ -124,7 +124,7 @@ Exit rules, checked on every tick of the option price:
 - stop-loss 25 % below entry premium, target +50 %
 - stop moves to breakeven at +15 %, trails 12 % below the highest premium once +20 %
 - underlying exit: a 5-minute close back through VWAP / EMA21 against the trade
-- time exit at **15:10**, daily loss limit 2 % of capital stops trading for the day
+- time exit at **15:10**, daily loss limit 4 % of capital, counted across all running indices, stops new entries for the day
 
 Sizing: lots = risk-per-trade ÷ (premium × stop % × lot size), clamped to `min_lots..max_lots`,
 and additionally capped by `live_max_lots` when live. A premium whose single-lot risk exceeds twice
@@ -154,6 +154,7 @@ System Settings > General > AirDrop & Handoff > AirPlay Receiver.
 - **Mode latch**: refuses to run live unless analyzer is OFF *and* `allow_live: true`; re-checks mode every minute and squares off if it flips to live without permission.
 - **Fill confirmation**: every order is polled via `orderstatus`; on timeout the position is checked, unconfirmed orders are cancelled before anything is re-sent, so no duplicate exits.
 - **Exit retries** then `closeposition` as a last resort, with a loud log/alert if even that fails.
+- **Broker data outage**: when the history call errors (not just lacks the latest candle), the agent switches to its tick-built candles after the same 20 s grace, so an underlying exit is not delayed while the broker is down. The option's own stop still needs a live premium; a protective stop order at the broker is the next step before going live.
 - **Crash-safe journal**: state is written after every transition. On restart the open trade is resumed (stop levels included) or closed out if it was exited in the OpenAlgo UI.
 - **Feed fallback**: websocket LTP with automatic REST `quotes` polling when the socket is stale.
 - **No retries on unknown order outcomes** (only on 429 rate limits), so a timeout never doubles an order.

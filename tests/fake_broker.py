@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 
 import pandas as pd
 
+from agent.broker import BrokerError
 from agent.clock import IST
 
 
@@ -81,6 +82,8 @@ class FakeBroker:
 
     def history(self, symbol, exchange, interval, start, end):
         self.calls.append("history")
+        if getattr(self, "history_fail", False):  # simulate "Could not reach the broker"
+            raise BrokerError("history: HTTP 500: Could not reach the broker", transient=True)
         df = self.candles
         d = df.index.date
         out = df[(d >= pd.Timestamp(start).date()) & (d <= pd.Timestamp(end).date())]

@@ -9,6 +9,8 @@ import logging
 from datetime import datetime, timedelta
 from pathlib import Path
 
+import pandas as pd
+
 from .broker import BrokerError, OrderRejected
 from .clock import MARKET_OPEN, Clock, at, parse_hhmm
 from datetime import time as _time
@@ -54,6 +56,7 @@ class Engine:
         self._holidays: dict[int, set[str]] = {}
         self._last_stop_persist: dict | None = None
         self._df = None
+        self._broker_df: pd.DataFrame | None = None  # last frame the broker actually served
         self.stop_mgr: StopManager | None = None
         self.stopped_reason: str | None = None
         self.tick_candles: TickCandleBuilder | None = None
@@ -340,15 +343,27 @@ class Engine:
     def _on_candle(self, now: datetime, paused: bool) -> None:
         assert self.journal
         self._last_fetch_ts = now.timestamp()
-        df = self.candles.fetch(now)
-        if df.empty:
+        tdf = self.tick_candles.frame(now) if self.tick_candles is not None else None
+        have_any_ticks = tdf is not None and not tdf.empty
+        try:
+            df = self.candles.fetch(now)
+            if not df.empty:
+                self._broker_df = df
+        except BrokerError as e:
+            # Broker data outage (e.g. AliceBlue "could not reach the broker"): do not sit and retry for
+            # minutes while a trade is open. Reuse the last good broker frame (so the opening range and
+            # indicators keep their history) and let the tick-built candles fill the missing slots below.
+            if not have_any_ticks:
+                raise
+            log.warning("history failed (%s); using last good candles plus tick-built ones", str(e)[:100])
+            df = self._broker_df if self._broker_df is not None else pd.DataFrame()
+        if df.empty and not have_any_ticks:
             log.warning("no candles returned for %s", self.cfg.signal_symbol)
             return
         expected_last = at(now.date(), MARKET_OPEN) + timedelta(seconds=(self._pending_candle_id - 1) * self.candles.secs)
         if expected_last < at(now.date(), MARKET_OPEN):
             self._last_candle_id = self._pending_candle_id  # first slot after the open: no candle has closed yet
             return
-        tdf = self.tick_candles.frame(now) if self.tick_candles is not None else None
         source = "broker"
         if df.empty or df.index[-1] < expected_last:
             # broker has not published the just-closed candle: give it a short grace, then use tick candles
@@ -402,7 +417,7 @@ class Engine:
             log.error("could not resolve contract: %s", e)
             return
         premium = float(q.get("ltp") or 0)
-        why = self.risk.can_enter(now, self.journal.realized_pnl(), premium)
+        why = self.risk.can_enter(now, self.journal.realized_pnl_all(), premium)
         if why:
             log.info("entry blocked: %s", why)
             return
@@ -472,8 +487,9 @@ class Engine:
         self._last_stop_persist = None
         self.notifier.send(f"[{self.mode_name}] SELL {trade.symbol} x{trade.qty} @ {trade.exit_price:.2f} "
                            f"pnl={trade.pnl:+.2f} ({reason}) day={self.journal.realized_pnl():+.2f}")
-        if self.risk.daily_loss_hit(self.journal.realized_pnl()):
-            log.warning("daily loss limit reached; no more entries today")
+        total = self.journal.realized_pnl_all()
+        if self.risk.daily_loss_hit(total):
+            log.warning("daily loss limit reached across all indices (%.2f); no more entries today", total)
 
     def _persist_stop(self, trade: Trade) -> None:
         if not self.stop_mgr:

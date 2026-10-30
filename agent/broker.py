@@ -143,7 +143,9 @@ class OpenAlgoBroker:
         """HTTP 403 with an empty body is not OpenAlgo; OpenAlgo always answers JSON."""
         if not isinstance(res, dict):
             return False
-        return res.get("code") == 403 and not str(res.get("raw_response") or "").strip()
+        # The SDK only sets raw_response when the body was not JSON; OpenAlgo's own 403s
+        # (e.g. "Invalid openalgo apikey" before login) are JSON and must not be mislabelled.
+        return res.get("code") == 403 and "raw_response" in res and not str(res["raw_response"]).strip()
 
     def ping(self) -> dict:
         # The SDK has no ping() method; use the REST endpoint directly.

@@ -272,3 +272,48 @@ def test_tick_candles_cover_broker_outage(tmp_path):
     assert len(j.trades) == 1 and j.trades[0].status == "CLOSED" and j.trades[0].option_type == "CE"
     tc = (tmp_path / "state" / "NIFTY" / "tickcandles-2026-10-27.csv").read_text().splitlines()
     assert tc[0].startswith("time,open,high,low,close") and any(l.startswith("2026-10-27T09:30:00+05:30,") for l in tc)
+
+
+def test_tick_candles_cover_history_errors(tmp_path):
+    """Like the outage test, but the broker's history call *errors* from 09:35 instead of merely lacking
+    the candle. The agent must still evaluate the 09:30 candle from ticks and trade."""
+    b = FakeBroker(candles())
+    b.history_cutoff = datetime(2026, 10, 27, 9, 30, tzinfo=IST)
+    b.set_ltp("NIFTY", 25010)
+    opt = "NIFTY27OCT2625050CE"
+    b.set_ltp(opt, 100.0)
+    start = datetime(2026, 10, 27, 9, 30, 0, tzinfo=IST)
+    events = []
+    for i in range(31):
+        px = 25010 + i * 50 / 30
+        events.append((start + timedelta(seconds=i * 10), (lambda p=px: b.push("NIFTY", "NSE_INDEX", p))))
+    events.append((start + timedelta(minutes=5), lambda: setattr(b, "history_fail", True)))
+    events.append((start + timedelta(minutes=5, seconds=40), lambda: b.push(opt, "NFO", 152.0)))
+    clock = ScriptedClock(start, events)
+    cfg = make_cfg(tmp_path)
+    cfg.execution.candle_grace_sec = 10
+    eng = Engine(cfg, b, clock)
+    eng.run(max_iterations=420)
+    j = Journal(tmp_path / "state" / "NIFTY", DAY)
+    assert len(j.trades) == 1 and j.trades[0].status == "CLOSED" and j.trades[0].option_type == "CE"
+
+
+def test_daily_loss_limit_counts_all_indices(tmp_path):
+    """SENSEX and BANKNIFTY journals already show -4,500 today: the NIFTY agent must not enter."""
+    for idx, pnl in (("SENSEX", -3000.0), ("BANKNIFTY", -1500.0)):
+        d = tmp_path / "state" / idx
+        d.mkdir(parents=True)
+        (d / f"{DAY.isoformat()}.json").write_text(json.dumps({"date": DAY.isoformat(), "trades": [
+            {"id": "x", "date": DAY.isoformat(), "mode": "paper", "symbol": f"{idx}X", "exchange": "NFO",
+             "option_type": "CE", "lots": 1, "qty": 1, "entry_price": 1.0, "status": "CLOSED", "pnl": pnl}]}))
+    b = FakeBroker(candles())
+    b.set_ltp("NIFTY", 25060)
+    opt = "NIFTY27OCT2625050CE"
+    b.set_ltp(opt, 100.0)
+    start = datetime(2026, 10, 27, 9, 35, 6, tzinfo=IST)
+    eng = Engine(make_cfg(tmp_path), b, ScriptedClock(start))
+    eng.run(max_iterations=10)
+    j = Journal(tmp_path / "state" / "NIFTY", DAY)
+    assert j.realized_pnl_all() == -4500.0
+    assert j.trades == []
+    assert not any(c.startswith("order:") for c in b.calls)

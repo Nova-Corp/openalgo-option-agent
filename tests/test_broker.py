@@ -51,3 +51,12 @@ def test_ping_not_logged_in_resets_but_is_plain():
         b.ping()
     assert "Sign in" in str(ei.value) and "AirPlay" not in str(ei.value)
     assert first.closed
+
+
+def test_ping_json_403_before_login_is_not_airplay():
+    before_login = {"status": "error", "message": "Invalid openalgo apikey", "code": 403}
+    b = make_broker([before_login])
+    with pytest.raises(BrokerError) as ei:
+        b.ping()
+    assert "AirPlay" not in str(ei.value)
+    assert b.api.client is not None

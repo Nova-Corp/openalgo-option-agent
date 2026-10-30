@@ -37,7 +37,7 @@ strategy:
 risk:
   capital: 100000              # the capital you are allocating to this agent (₹)
   risk_per_trade_pct: 2.0      # ₹2,000 per trade at 1 lakh -> a ₹200 NIFTY premium is tradeable with 1 lot
-  max_daily_loss_pct: 4.0      # stop trading for the day after -₹4,000
+  max_daily_loss_pct: 4.0      # stop trading for the day after -₹4,000, counted across ALL indices together
   max_lots: 2
   min_lots: 1
   stop_loss_pct: 25            # on the option premium

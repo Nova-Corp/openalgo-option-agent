@@ -117,6 +117,20 @@ class Journal:
     def realized_pnl(self) -> float:
         return float(sum(t.pnl for t in self._trades if t.status == "CLOSED"))
 
+    def realized_pnl_all(self) -> float:
+        """Today's realized P&L across every index: this journal plus the sibling state/<INDEX>/ journals.
+        The daily loss limit is a per-account number, so three agents must share it."""
+        total = self.realized_pnl()
+        for other in self.dir.parent.glob(f"*/{self.day.isoformat()}.json"):
+            if other.parent == self.dir:
+                continue
+            try:
+                data = json.loads(other.read_text())
+            except (OSError, json.JSONDecodeError):
+                continue
+            total += sum(float(t.get("pnl") or 0) for t in data.get("trades", []) if t.get("status") == "CLOSED")
+        return float(total)
+
     def count(self, option_type: str | None = None) -> int:
         ts = [t for t in self._trades if t.status != "FAILED"]
         if option_type:
