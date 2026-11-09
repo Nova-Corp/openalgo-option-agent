@@ -39,10 +39,15 @@ class RiskManager:
         return None
 
     def lots_for(self, premium: float, lotsize: int, live: bool) -> int:
-        """Lots so that premium * stop% * qty <= risk per trade; clamped to config."""
+        """Lots so that stop_loss * qty <= risk per trade; clamped to config."""
         if premium <= 0 or lotsize <= 0:
             return 0
-        risk_per_lot = premium * self.cfg.stop_loss_pct / 100.0 * lotsize
+        if self.cfg.stop_loss_points is not None and self.cfg.stop_loss_points > 0:
+            risk_per_lot = self.cfg.stop_loss_points * lotsize
+        else:
+            risk_per_lot = premium * self.cfg.stop_loss_pct / 100.0 * lotsize
+        if risk_per_lot <= 0:
+            return 0
         lots = math.floor(self.risk_per_trade / risk_per_lot)
         lots = max(self.cfg.min_lots, min(lots, self.cfg.max_lots))
         if live:
@@ -79,8 +84,17 @@ class StopManager:
 
     @classmethod
     def new(cls, cfg: RiskCfg, entry: float) -> "StopManager":
-        st = StopState(entry=entry, stop=round(entry * (1 - cfg.stop_loss_pct / 100), 2),
-                       target=round(entry * (1 + cfg.target_pct / 100), 2), highest=entry)
+        if cfg.stop_loss_points is not None and cfg.stop_loss_points > 0:
+            stop = round(max(0.05, entry - cfg.stop_loss_points), 2)
+        else:
+            stop = round(entry * (1 - cfg.stop_loss_pct / 100), 2)
+
+        if cfg.target_points is not None and cfg.target_points > 0:
+            target = round(entry + cfg.target_points, 2)
+        else:
+            target = round(entry * (1 + cfg.target_pct / 100), 2)
+
+        st = StopState(entry=entry, stop=stop, target=target, highest=entry)
         return cls(cfg, st)
 
     def update(self, ltp: float) -> str | None:
@@ -92,14 +106,35 @@ class StopManager:
             return f"TARGET ltp {ltp:.2f} >= target {s.target:.2f}"
         if ltp > s.highest:
             s.highest = ltp
-        gain_pct = (s.highest - s.entry) / s.entry * 100
-        if not s.breakeven_done and gain_pct >= self.cfg.breakeven_at_pct:
+        gain = s.highest - s.entry
+        gain_pct = (gain / s.entry * 100) if s.entry > 0 else 0
+
+        # Breakeven check
+        be_hit = False
+        if self.cfg.breakeven_points is not None and self.cfg.breakeven_points > 0:
+            be_hit = gain >= self.cfg.breakeven_points
+        elif self.cfg.breakeven_at_pct > 0 and self.cfg.breakeven_points is None:
+            be_hit = gain_pct >= self.cfg.breakeven_at_pct
+
+        if not s.breakeven_done and be_hit:
             s.stop = max(s.stop, s.entry)
             s.breakeven_done = True
-        if gain_pct >= self.cfg.trail_activate_pct:
+
+        # Trailing check
+        trail_hit = False
+        if self.cfg.trail_activate_points is not None and self.cfg.trail_activate_points > 0:
+            trail_hit = gain >= self.cfg.trail_activate_points
+        elif self.cfg.trail_activate_pct > 0 and self.cfg.trail_activate_points is None:
+            trail_hit = gain_pct >= self.cfg.trail_activate_pct
+
+        if trail_hit:
             s.trailing = True
+
         if s.trailing:
-            trail = round(s.highest * (1 - self.cfg.trail_step_pct / 100), 2)
+            if self.cfg.trail_step_points is not None and self.cfg.trail_step_points > 0:
+                trail = round(s.highest - self.cfg.trail_step_points, 2)
+            else:
+                trail = round(s.highest * (1 - self.cfg.trail_step_pct / 100), 2)
             if trail > s.stop:
                 s.stop = trail
         return None

@@ -68,6 +68,11 @@ class RiskCfg(BaseModel):
     breakeven_at_pct: float = 15.0
     trail_activate_pct: float = 20.0
     trail_step_pct: float = 12.0  # trail stop this % below the highest premium seen
+    target_points: float | None = None
+    stop_loss_points: float | None = None
+    breakeven_points: float | None = None
+    trail_activate_points: float | None = None
+    trail_step_points: float | None = None
     min_premium: float = 20.0
     max_premium: float = 400.0
     square_off_time: str = "15:10"
@@ -78,6 +83,23 @@ class RiskCfg(BaseModel):
         if v <= 0:
             raise ValueError("must be > 0")
         return v
+
+    @field_validator(
+        "target_points",
+        "stop_loss_points",
+        "breakeven_points",
+        "trail_activate_points",
+        "trail_step_points",
+        mode="before",
+    )
+    @classmethod
+    def _non_negative_points(cls, v: float | None) -> float | None:
+        if v is None:
+            return None
+        v_float = float(v)
+        if v_float < 0:
+            raise ValueError("must be >= 0")
+        return v_float
 
 
 class ExecutionCfg(BaseModel):

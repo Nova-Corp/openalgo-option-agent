@@ -41,12 +41,17 @@ risk:
   max_daily_loss_pct: 4.0      # stop trading for the day after -₹4,000, counted across ALL indices together
   max_lots: 2
   min_lots: 1
-  stop_loss_pct: 25            # on the option premium
+  target_points: 25            # Target in points on option premium (NIFTY default: 25 pts)
+  stop_loss_points: 25         # Stoploss in points on option premium (NIFTY default: 25 pts -> 25*65 = ₹1,625 <= ₹2,000)
+  breakeven_points: 15         # Move stop to entry once premium is +15 points
+  trail_activate_points: 20    # Start trailing once premium is +20 points
+  trail_step_points: 10        # Trail 10 points below highest premium seen
+  stop_loss_pct: 25            # Percentage fallback if points not set
   target_pct: 50
-  breakeven_at_pct: 15         # move stop to entry once premium is +15%
-  trail_activate_pct: 20       # start trailing once premium is +20% (was 25; a +24% move gave back everything on 2026-10-28)
-  trail_step_pct: 12           # trail 12% below the highest premium seen
-  min_premium: 20
+  breakeven_at_pct: 15
+  trail_activate_pct: 20
+  trail_step_pct: 12
+  min_premium: 30
   max_premium: 400
   square_off_time: "15:10"
 
@@ -65,18 +70,40 @@ execution:
 
 # Indices ./morning.sh starts when you give it no arguments. Each runs as its own agent with its own
 # journal in state/<INDEX>/, its own daily loss limit and its own lots. ./morning.sh NIFTY SENSEX overrides this.
-active_underlyings: [NIFTY]
+active_underlyings: [NIFTY, BANKNIFTY, SENSEX]
 
 # Per-index overrides, applied on top of the sections above when that index is selected.
 # BANKNIFTY and SENSEX ATM premiums are usually 3-5x NIFTY's, so widen the premium window there.
 underlyings:
-  NIFTY: {}
+  NIFTY:
+    risk:
+      target_points: 25
+      stop_loss_points: 25
+      breakeven_points: 15
+      trail_activate_points: 20
+      trail_step_points: 10
+      min_premium: 30
+      max_premium: 400
   BANKNIFTY:
     # monthly-only expiries: ATM premiums run ~₹800-1,100 four weeks out, so with ₹1 lakh capital BANKNIFTY
     # only fits the risk budget in its expiry week. Even OTM10 (1,000 pts out) calls were ₹610 on 28 Oct.
-    risk: {min_premium: 50, max_premium: 1200}
+    risk:
+      target_points: 50
+      stop_loss_points: 50
+      breakeven_points: 25
+      trail_activate_points: 35
+      trail_step_points: 15
+      min_premium: 60
+      max_premium: 1200
   SENSEX:
-    risk: {min_premium: 50, max_premium: 1200}
+    risk:
+      target_points: 50
+      stop_loss_points: 50
+      breakeven_points: 25
+      trail_activate_points: 35
+      trail_step_points: 15
+      min_premium: 60
+      max_premium: 1200
 
 notify:
   telegram_username: ""        # your OpenAlgo Telegram bot username to get trade alerts (optional)

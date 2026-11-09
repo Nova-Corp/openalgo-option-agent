@@ -64,6 +64,8 @@ def cmd_run(cfg, args):
         raise SystemExit(128 + signum)
 
     for sig in (signal.SIGTERM, signal.SIGHUP):
+        if sig == signal.SIGHUP and signal.getsignal(signal.SIGHUP) == signal.SIG_IGN:
+            continue
         signal.signal(sig, _on_signal)
     try:
         with SingleInstance(cfg.index_state_dir / "agent.lock"):
